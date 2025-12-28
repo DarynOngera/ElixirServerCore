@@ -6,8 +6,13 @@ defmodule Core.HTTP.Router do
 
   plug Plug.Logger, log: :info
   plug :match
+  plug Plug.Parsers, parsers: [:json], json_decoder: Jason
   plug Plug.Telemetry, event_prefix: [:server, :http]
   plug :dispatch
+
+  ## ============================================================
+  ## Routes
+  ## ============================================================
 
   # Root endpoint
   get "/" do
@@ -23,35 +28,56 @@ defmodule Core.HTTP.Router do
 
   # Submit a new job
   post "/jobs" do
-    {:ok, body, _} = Plug.Conn.read_body(conn)
-    {:ok, id} = JobQueue.submit(%{payload: body})
-    send_resp(conn, 202, "Job accepted: #{id}")
-  end
-
-  # List all jobs
-  get "/jobs" do
-    jobs = JobQueue.all()
-    send_resp(conn, 200, Jason.encode!(jobs))
-  end
-
-  # Mark job running
-  post "/jobs/:id/run" do
-    id = String.to_integer(id)
-    case JobQueue.mark_running(id) do
-      :ok -> send_resp(conn, 200, "Job #{id} marked running")
-      {:error, :not_found} -> send_resp(conn, 404, "Job not found")
+    case conn.body_params do
+      %{"payload" => payload} ->
+        {:ok, id} = JobQueue.submit(payload)
+        
+        response = Jason.encode!(%{
+          message: "Job accepted",
+          job_id: id
+        })
+        
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(202, response)
+      
+      _ ->
+        error = Jason.encode!(%{error: "Missing 'payload' field"})
+        
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(400, error)
     end
   end
 
-  # Mark job done
-  post "/jobs/:id/done" do
-    id = String.to_integer(id)
-    {:ok, body, _} = Plug.Conn.read_body(conn)
-    result = Jason.decode!(body)
+  # Get all jobs
+  get "/jobs" do
+    jobs = JobQueue.all()
+    response = Jason.encode!(jobs)
     
-    case JobQueue.mark_done(id, result) do
-      :ok -> send_resp(conn, 200, "Job #{id} marked done")
-      {:error, :not_found} -> send_resp(conn, 404, "Job not found")
+    conn
+    |> put_resp_content_type("application/json")
+    |> send_resp(200, response)
+  end
+
+  # Get a specific job by ID
+  get "/jobs/:id" do
+    id = String.to_integer(id)
+    
+    case JobQueue.get(id) do
+      {:ok, job} ->
+        response = Jason.encode!(job)
+        
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(200, response)
+      
+      {:error, :not_found} ->
+        error = Jason.encode!(%{error: "Job not found"})
+        
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(404, error)
     end
   end
 
@@ -59,4 +85,3 @@ defmodule Core.HTTP.Router do
     send_resp(conn, 404, "Not Found")
   end
 end
-
