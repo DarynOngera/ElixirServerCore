@@ -3,7 +3,9 @@ defmodule Core.Application do
   require Logger
 
   def start(_type, _args) do
-    children = []
+    children = [
+      Core.Workers.JobQueue
+    ]
     
     opts = [strategy: :one_for_one, name: Core.Supervisor]
   case Supervisor.start_link(children, opts) do 
