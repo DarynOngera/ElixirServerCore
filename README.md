@@ -1,3 +1,4 @@
+**This is not the top level of the project, if you are expecting `mix.exs` regards.**
 # Elixir Server Core
 
 An **open-source, production-oriented Elixir HTTP server framework** designed with **reliability, observability, and modular architecture** as first-class concerns. This framework can be forked to create specialized servers, such as Music servers, PDF servers, or custom domain-specific services.
