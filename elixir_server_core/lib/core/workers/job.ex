@@ -1,4 +1,5 @@
-defmodule Core.Workers.Job do 
+defmodule Core.Workers.Job do
+  @derive Jason.Encoder
   @enforce_keys [:id, :payload, :inserted_at]
   defstruct [
     :id, 
