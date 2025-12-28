@@ -15,7 +15,7 @@ defmodule Core.Workers.JobQueue do
     job = %Job{
       id: System.unique_integer([:positive]),
       payload: payload,
-      inserted_at: System.monotonic_time()
+      inserted_at: DateTime.utc_now()
     }
 
     GenServer.cast(__MODULE__, {:enqueue, job})
