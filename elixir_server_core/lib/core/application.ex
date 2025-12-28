@@ -8,12 +8,7 @@ defmodule Core.Application do
     ]
     
     opts = [strategy: :one_for_one, name: Core.Supervisor]
-  case Supervisor.start_link(children, opts) do 
-      {:ok, pid} ->
-        Logger.info("")
-        {:ok, pid}
-      error ->
-        error
+    Supervisor.start_link(children, opts)
   end
 end
 
