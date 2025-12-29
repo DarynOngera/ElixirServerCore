@@ -792,8 +792,8 @@ PORT=5001 mix run --no-halt
 ## Support
 
 - 📖 [Core Documentation](/README.md)
-- 🐛 [Report Issues](https://github.com/DarynOngera/ElixirServerCore/elixir_server_core/issues)
-- 💬 [Discussions](https://github.com/DarynOngera/ElixirServerCore/elixir_server_core/discussions)
+- 🐛 [Report Issues](https://github.com/DarynOngera/ElixirServerCore/issues)
+- 💬 [Discussions](https://github.com/DarynOngera/ElixirServerCore/discussions)
 
 ---
 
