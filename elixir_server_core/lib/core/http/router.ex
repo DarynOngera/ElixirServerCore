@@ -1,5 +1,9 @@
 # lib/core/http/router.ex
 defmodule Core.HTTP.Router do
+  @moduledoc """
+  Default router implementation.
+  This is used by the demo application.
+  """
   use Plug.Router
   require Logger
   alias Core.Workers.JobQueue
@@ -9,10 +13,6 @@ defmodule Core.HTTP.Router do
   plug Plug.Parsers, parsers: [:json], json_decoder: Jason
   plug Plug.Telemetry, event_prefix: [:server, :http]
   plug :dispatch
-
-  ## ============================================================
-  ## Routes
-  ## ============================================================
 
   # Root endpoint
   get "/" do

@@ -15,7 +15,7 @@ defmodule ElixirServerCore.MixProject do
   def application do
     [
       extra_applications: [:logger],
-      mod: {ElixirServerCore.Application, []}
+      mod: if(Mix.env() == :dev, do: {ElixirServerCore.Application, []}, else: nil)
     ]
   end
 
