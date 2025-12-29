@@ -1,18 +1,22 @@
 defmodule Core.Capability.WorkQueue do
+  @moduledoc """
+  Work queue capability with configurable worker module.
+  """
   use Supervisor
-  alias Core.Workers.JobQueue
 
-  def start_link(_) do
-    Supervisor.start_link(__MODULE__, :ok, name: __MODULE__)
+  def start_link(opts) do
+    Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
   @impl true
-  def init(:ok) do
+  def init(opts) do
+    worker_module = Keyword.get(opts, :worker, Core.Workers.Worker)
+    
     children = [
-      {JobQueue, []}
+      Core.Workers.JobQueue,
+      {worker_module, []}
     ]
 
     Supervisor.init(children, strategy: :one_for_one)
   end
 end
-
