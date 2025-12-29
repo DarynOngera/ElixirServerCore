@@ -388,10 +388,10 @@ mix run --no-halt
 ```
 
 Your server is now running with:
-- ✅ Job queue from core
-- ✅ Custom routes for your domain
-- ✅ Custom worker logic
-- ✅ Your domain-specific services
+- [✓] Job queue from core
+- [✓] Custom routes for your domain
+- [✓] Custom worker logic
+- [✓] Your domain-specific services
 
 ---
 
@@ -791,9 +791,9 @@ PORT=5001 mix run --no-halt
 
 ## Support
 
-- 📖 [Core Documentation](/README.md)
-- 🐛 [Report Issues](https://github.com/DarynOngera/ElixirServerCore/issues)
-- 💬 [Discussions](https://github.com/DarynOngera/ElixirServerCore/discussions)
+- [Core Documentation](/README.md)
+- [Report Issues](https://github.com/DarynOngera/ElixirServerCore/issues)
+- [Discussions](https://github.com/DarynOngera/ElixirServerCore/discussions)
 
 ---
 
