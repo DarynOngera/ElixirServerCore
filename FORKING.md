@@ -56,7 +56,7 @@ end
 # mix.exs
 defp deps do
   [
-    {:elixir_server_core, git: "https://github.com/yourusername/elixir_server_core.git"}
+    {:elixir_server_core, git: "https://github.com/DarynOngera/ElixirServerCore/elixir_server_core.git"}
   ]
 end
 ```
