@@ -1,5 +1,3 @@
-**This is not the root of the project, regards.**
-`cd elixir_server_core`
 # Elixir Server Core
 
 An **open-source, production-oriented Elixir HTTP server framework** designed with **reliability, observability, and modular architecture** as first-class concerns. This framework can be forked to create specialized servers, such as Music servers, PDF servers, or custom domain-specific services.
