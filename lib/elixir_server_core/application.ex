@@ -1,7 +1,8 @@
 defmodule ElixirServerCore.Application do
   @moduledoc """
-  Demo application showing how to use the framework.
-  This only runs when starting the project directly (not as a dependency).
+  Main application supervisor. Starts in all Mix environments.
+  Forks should replace Core.HTTP.Router with their own router module,
+  and optionally swap Core.Workers.Worker for a domain-specific worker.
   """
   use Application
   require Logger
@@ -11,18 +12,18 @@ defmodule ElixirServerCore.Application do
     port = System.get_env("PORT", "4000") |> String.to_integer()
 
     children = [
-      # Using the capability modules
-      {Core.Capability.WorkQueue, []},
-      {Core.Capability.HTTP, port: port, router: Core.HTTP.Router}
+      Core.Workers.JobQueue,
+      Core.Workers.WorkerPool,
+      {Plug.Cowboy,
+       scheme: :http,
+       plug: Core.HTTP.Router,
+       options: [port: port, ip: {0, 0, 0, 0}]}
     ]
-    
-    Logger.info("Starting Elixir Server Core (Demo Mode)")
-    Logger.info("Server running on http://localhost:#{port}")
-    
-    Supervisor.start_link(
-      children,
-      strategy: :one_for_one,
-      name: ElixirServerCore.Supervisor
-    )
+
+    Logger.info("Starting Elixir Server Core on port #{port}")
+    Logger.info("http://localhost:#{port}")
+
+    opts = [strategy: :one_for_one, name: ElixirServerCore.Supervisor]
+    Supervisor.start_link(children, opts)
   end
 end
