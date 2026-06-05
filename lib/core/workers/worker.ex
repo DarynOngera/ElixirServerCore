@@ -2,13 +2,13 @@ defmodule Core.Workers.Worker do
   @moduledoc """
   Background job worker. Polls the JobQueue every `@poll_interval` ms,
   claims the next available job, executes it, and updates its status.
- 
+
   Designed to run in a pool via Core.Workers.WorkerPool. Each worker
   process operates independently — there is no cross-worker coordination
   needed because JobQueue serializes claim_next/0 via GenServer.call.
- 
+
   ## Telemetry events emitted
- 
+
   - `[:core, :job, :start]`  — when a job begins executing
       metadata: `%{job_id: id, attempt: n, payload: map}`
   - `[:core, :job, :stop]`   — when a job completes successfully
@@ -23,7 +23,8 @@ defmodule Core.Workers.Worker do
   alias Core.Workers.JobQueue
   alias Core.Telemetry.Events
 
-  @poll_interval 1_000  # 1 second
+  # 1 second
+  @poll_interval 1_000
 
   ## ============================================================
   ## Public API
@@ -35,14 +36,13 @@ defmodule Core.Workers.Worker do
     GenServer.start_link(__MODULE__, %{id: worker_id}, name: name)
   end
 
-
   ## ============================================================
   ## GenServer Callbacks
   ## ============================================================
 
   @impl true
   def init(%{id: id} = state) do
-    Logger.info("Worker ##{id}started")
+    Logger.info("Worker ##{id} started")
     schedule_work()
     {:ok, state}
   end
@@ -76,6 +76,7 @@ defmodule Core.Workers.Worker do
     )
 
     start_time = System.monotonic_time()
+
     try do
       result = perform_work(job)
       duration = System.monotonic_time() - start_time
@@ -88,22 +89,22 @@ defmodule Core.Workers.Worker do
 
       JobQueue.mark_done(job.id, result)
       Logger.info("Worker ##{worker_id} completed job #{job.id} in #{native_to_ms(duration)}ms")
-      rescue
+    rescue
       error ->
         duration = System.monotonic_time() - start_time
         message = Exception.message(error)
- 
+
         :telemetry.execute(
           Events.job_error(),
           %{duration: duration},
           %{job_id: job.id, error: message}
         )
- 
+
         error_details = %{
           error: message,
           stacktrace: Exception.format_stacktrace(__STACKTRACE__)
         }
- 
+
         Logger.error("Worker ##{worker_id} failed job #{job.id}: #{message}")
         JobQueue.mark_failed(job.id, error_details)
     end
@@ -114,7 +115,7 @@ defmodule Core.Workers.Worker do
     # In a real application, this would dispatch to different handlers
     # based on job type
     Process.sleep(100)
-    
+
     %{
       status: "completed",
       job_id: job.id,
