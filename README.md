@@ -1,10 +1,20 @@
 # Elixir Server Core
 
-A **minimal, forkable Elixir server** with HTTP routing, background job queueing, and optional SQLite persistence — no Phoenix, no Oban, just the primitives you need for domain-specific services.
+**Build specialized background-job servers in Elixir without the bloat of a web framework.**
 
-**The problem:** Building a specialized server (a music converter, a PDF processor, a webhook relay) usually means stripping down a web framework or wiring GenServers from scratch. You don't need all of Phoenix. You just need HTTP endpoints, a job queue, retries, and maybe durability across restarts.
+Elixir Server Core is a minimal, forkable HTTP server with built-in job queueing, retries, and pluggable persistence. It gives you the primitives you need — HTTP routing, supervised workers, durable jobs, observability — without forcing Phoenix or Oban on you.
 
-**The solution:** Fork this repo, write your domain logic, and deploy. The core handles HTTP with Plug + Cowboy, job lifecycle with OTP supervision, exponential backoff retries, and Telemetry observability. Storage is pluggable: in-memory for prototyping, SQLite for single-node durability, or any SQL database via the `Core.JobStore` behaviour.
+**Typical use cases:**
+
+- **Media processing** — transcode audio, generate thumbnails, extract metadata
+- **Document conversion** — PDF optimization, image resizing, format conversion
+- **Webhook receivers** — ingest HTTP callbacks and process them asynchronously
+- **Single-node workers** — background tasks with SQLite durability on a small VPS
+- **Learning OTP** — assemble a production system from scratch using GenServer, Supervisors, and Behaviours
+
+**The problem:** Building a specialized server usually means stripping down a web framework or wiring GenServers from scratch. You don't need all of Phoenix. You just need HTTP endpoints, a job queue, retries, and maybe durability across restarts.
+
+**The solution:** Add this package to your project (or fork the repo), configure your router and worker module, and deploy. The core handles HTTP with Plug + Cowboy, job lifecycle with OTP supervision, exponential backoff retries, and Telemetry observability. Storage is pluggable: in-memory for prototyping, SQLite for single-node durability, or any SQL database via the `Core.JobStore` behaviour.
 
 ---
 
@@ -24,6 +34,44 @@ A **minimal, forkable Elixir server** with HTTP routing, background job queueing
 * Pagination and filtering for job listings
 * Health check endpoint
 * Modular and extensible architecture
+
+---
+
+## Quick Start
+
+### As a Library (add to deps)
+
+```elixir
+# mix.exs
+{:elixir_server_core, "~> 0.1"}
+
+# config/config.exs
+config :elixir_server_core,
+  router: MyApp.Router,
+  port: 4000,
+  job_store: Core.JobStore.SQLite,
+  job_store_opts: [database: "priv/jobs.db"]
+```
+
+The framework auto-starts `JobQueue`, `WorkerPool`, and `Plug.Cowboy` with your router.
+
+### Manual Supervision (library, full control)
+
+```elixir
+# config/config.exs
+config :elixir_server_core, start_http: false
+
+# application.ex
+children = [
+  {Core.Workers.JobQueue, store: Core.JobStore.SQLite, store_opts: [database: "jobs.db"]},
+  {Core.Workers.WorkerPool, worker: MyApp.Worker, size: 4},
+  {Plug.Cowboy, scheme: :http, plug: MyApp.Router, options: [port: 4000]}
+]
+```
+
+### As a Fork (customize internals)
+
+Clone, rename the app in `mix.exs`, edit `lib/core/` directly. See [FORKING.md](FORKING.md).
 
 ---
 
@@ -796,6 +844,24 @@ Then access metrics at `http://localhost:9568/metrics`
 
 ---
 
+## Configuration Reference
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `:router` | module | `Core.HTTP.Router` | Plug router module |
+| `:port` | integer | `4000` (or `PORT` env) | HTTP server port |
+| `:ip` | tuple | `{0,0,0,0}` | Bind address |
+| `:worker` | module | `Core.Workers.Worker` | Worker module for processing jobs |
+| `:worker_pool_size` | integer | CPU cores | Number of concurrent workers |
+| `:job_store` | module | `Core.JobStore.Memory` | Persistence backend |
+| `:job_store_opts` | keyword | `[]` | Options passed to the store |
+| `:start_http` | boolean | `true` | Start `Plug.Cowboy` automatically |
+| `:start_workers` | boolean | `true` | Start `WorkerPool` automatically |
+
+Set `start_http: false` when integrating into an existing Phoenix application or when you want full control over the HTTP server.
+
+---
+
 ## Troubleshooting
 
 ### Server won't start
@@ -887,13 +953,18 @@ For questions, issues, or feature requests, please open an issue on GitHub.
 
 ## Roadmap
 
-- [ ] Add persistent storage backend (PostgreSQL)
-- [ ] Implement job priorities
-- [ ] Add worker pool for parallel processing
-- [ ] Build Prometheus integration
-- [ ] Add job scheduling (cron-like)
-- [ ] Implement job retries with exponential backoff
-- [ ] Add authentication and authorization
-- [ ] Create admin dashboard UI
+Completed:
+- [x] Worker pool for parallel processing
+- [x] Job scheduling (cron-like)
+- [x] Job retries with exponential backoff
+- [x] SQLite persistence backend
+- [x] Pluggable `Core.JobStore` behaviour for custom databases
+
+Planned:
+- [ ] PostgreSQL persistence backend (via `Core.JobStore.SQL` + Postgrex)
+- [ ] Job priorities
+- [ ] Prometheus + Grafana integration
+- [ ] Authentication and authorization
+- [ ] Admin dashboard UI
 - [ ] Docker and Kubernetes deployment guides
 - [ ] Performance benchmarking suite
