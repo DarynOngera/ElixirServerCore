@@ -1,20 +1,19 @@
 # Elixir Server Core
 
-**Build specialized background-job servers in Elixir without the bloat of a web framework.**
+**Build small, durable background-processing services in Elixir without Phoenix or Oban.**
 
-Elixir Server Core is a minimal, forkable HTTP server with built-in job queueing, retries, and pluggable persistence. It gives you the primitives you need — HTTP routing, supervised workers, durable jobs, observability — without forcing Phoenix or Oban on you.
+Elixir Server Core is a minimal, forkable toolkit for background-job services. It gives you HTTP endpoints, supervised workers, pluggable job persistence, and observability — the primitives you actually need, without the parts you don't.
 
 **Typical use cases:**
 
-- **Media processing** — transcode audio, generate thumbnails, extract metadata
-- **Document conversion** — PDF optimization, image resizing, format conversion
-- **Webhook receivers** — ingest HTTP callbacks and process them asynchronously
-- **Single-node workers** — background tasks with SQLite durability on a small VPS
-- **Learning OTP** — assemble a production system from scratch using GenServer, Supervisors, and Behaviours
+- **Specialized worker services** — media transcoding, PDF processing, webhook ingestion
+- **Single-node deployments** — SQLite-backed durability on a small VPS or embedded device
+- **Learning OTP** — assemble a production system from GenServer, Supervisors, and Behaviours
+- **Forking** — clone, swap in your domain logic, and ship
 
-**The problem:** Building a specialized server usually means stripping down a web framework or wiring GenServers from scratch. You don't need all of Phoenix. You just need HTTP endpoints, a job queue, retries, and maybe durability across restarts.
+**The problem:** Background-processing services in Elixir usually pull in Phoenix or Oban. That's overkill when you just need an HTTP entry point, a job queue, retries, and maybe a SQLite file for durability across restarts.
 
-**The solution:** Add this package to your project (or fork the repo), configure your router and worker module, and deploy. The core handles HTTP with Plug + Cowboy, job lifecycle with OTP supervision, exponential backoff retries, and Telemetry observability. Storage is pluggable: in-memory for prototyping, SQLite for single-node durability, or any SQL database via the `Core.JobStore` behaviour.
+**The solution:** Fork this repo or add it as a dependency. Configure your router and worker module. The core handles the rest — HTTP via Plug + Cowboy, job lifecycle via OTP supervision, exponential backoff retries, and Telemetry. Storage is pluggable: in-memory for prototyping, SQLite for single-node durability, or any SQL database via the `Core.JobStore` behaviour.
 
 ---
 
