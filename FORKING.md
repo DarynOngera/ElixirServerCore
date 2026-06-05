@@ -20,7 +20,7 @@ You can fork this to create domain-specific servers by:
 
 ## Method 1: Using as a Library (Recommended)
 
-This method lets you use Elixir Server Core as a dependency without modifying it.
+Add `elixir_server_core` to your `mix.exs` and configure it. The framework starts automatically with your supervision tree — no need to wire GenServers manually.
 
 ### Step 1: Create a New Project
 
@@ -29,39 +29,37 @@ mix new my_music_server --sup
 cd my_music_server
 ```
 
-### Step 2: Add Elixir Server Core as Dependency
+### Step 2: Add the Dependency
 
-**Option A: From Hex (when published)**
 ```elixir
 # mix.exs
 defp deps do
   [
-    {:elixir_server_core, "~> 0.1.0"}
+    {:elixir_server_core, "~> 0.1"}
+    # Optional: for SQLite persistence
+    # {:exqlite, "~> 0.29"}
   ]
 end
 ```
 
-**Option B: From Local Path (for development)**
+### Step 3: Configure
+
 ```elixir
-# mix.exs
-defp deps do
-  [
-    {:elixir_server_core, path: "../elixir_server_core"}
-  ]
-end
+# config/config.exs
+import Config
+
+config :elixir_server_core,
+  router: MyMusicServer.Router,
+  port: 5000,
+  worker: MyMusicServer.MusicWorker,
+  worker_pool_size: 4,
+  job_store: Core.JobStore.SQLite,
+  job_store_opts: [database: "priv/jobs.db"]
 ```
 
-**Option C: From Git**
-```elixir
-# mix.exs
-defp deps do
-  [
-    {:elixir_server_core, git: "https://github.com/DarynOngera/ElixirServerCore/elixir_server_core.git"}
-  ]
-end
-```
+That's it. ` mix run --no-halt` starts the HTTP server, job queue, worker pool, and persistence — all supervised.
 
-### Step 3: Create Your Custom Router
+### Step 4: Create Your Custom Router
 
 You have two approaches for creating a custom router:
 
@@ -184,7 +182,7 @@ defmodule MyMusicServer.Router do
 end
 ```
 
-### Step 4: Choose a Job Store (Optional)
+### Step 5: Choose a Job Store (Optional)
 
 By default jobs are kept in memory and lost on VM restart. To persist jobs across restarts, implement the `Core.JobStore` behaviour. The framework provides `Core.JobStore.SQL` helpers so you only write connection plumbing.
 
@@ -269,7 +267,7 @@ children = [
 
 ---
 
-### Step 5: Create Custom Worker (Optional)
+### Step 6: Create Custom Worker (Optional)
 
 If you need custom job processing logic:
 
@@ -408,9 +406,16 @@ defmodule MyMusicServer.MusicWorker do
 end
 ```
 
-### Step 6: Set Up Your Application
+### Step 7: Set Up Your Application (Optional)
+
+When using the library with config (Steps 1-3 above), the framework auto-starts. You only need a custom `Application` module if you want full control over the supervision tree.
+
+#### Full Manual Control
 
 ```elixir
+# config/config.exs
+config :elixir_server_core, start_http: false, start_workers: false
+
 # lib/my_music_server/application.ex
 defmodule MyMusicServer.Application do
   use Application
@@ -421,27 +426,17 @@ defmodule MyMusicServer.Application do
     port = System.get_env("PORT", "5000") |> String.to_integer()
 
     children = [
-      # Core job queue (always needed)
-      Core.Workers.JobQueue,
-      
-      # Your custom worker (or use Core.Workers.Worker)
-      MyMusicServer.MusicWorker,
-      
-      # HTTP server with your custom router
-      {Plug.Cowboy, 
-        scheme: :http, 
-        plug: MyMusicServer.Router, 
-        options: [port: port, ip: {0, 0, 0, 0}]
-      },
-      
-      # Your domain-specific services
+      {Core.Workers.JobQueue,
+        store: Core.JobStore.SQLite,
+        store_opts: [database: "priv/jobs.db"]},
+      {Core.Workers.WorkerPool, worker: MyMusicServer.MusicWorker, size: 4},
+      {Plug.Cowboy,
+        scheme: :http,
+        plug: MyMusicServer.Router,
+        options: [port: port, ip: {0, 0, 0, 0}]},
       MyMusicServer.Library,
-      MyMusicServer.Player,
-      MyMusicServer.PlaylistManager
+      MyMusicServer.Player
     ]
-
-    Logger.info("Starting Music Server on port #{port}")
-    Logger.info("http://localhost:#{port}")
 
     opts = [strategy: :one_for_one, name: MyMusicServer.Supervisor]
     Supervisor.start_link(children, opts)
@@ -449,7 +444,7 @@ defmodule MyMusicServer.Application do
 end
 ```
 
-### Step 7: Add Required Dependencies
+### Step 8: Add Required Dependencies
 
 ```elixir
 # mix.exs
@@ -464,7 +459,7 @@ defp deps do
 end
 ```
 
-### Step 8: Run Your Server
+### Step 9: Run Your Server
 
 ```bash
 mix deps.get

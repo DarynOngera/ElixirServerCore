@@ -9,8 +9,11 @@ defmodule ElixirServerCore.MixProject do
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       name: "Elixir Server Core",
+      description:
+        "A minimal, forkable Elixir server with HTTP routing, background job queueing, and pluggable persistence.",
       source_url: "https://github.com/DarynOngera/ElixirServerCore",
       homepage_url: "https://github.com/DarynOngera/ElixirServerCore",
+      package: package(),
       docs: [
         main: "readme",
         extras: ["README.md", "FORKING.md", "ENDPOINT_TEST.md"],
@@ -26,6 +29,18 @@ defmodule ElixirServerCore.MixProject do
           Telemetry: [Core.Telemetry.Events, Core.Telemetry.Metrics, Core.Capability.Metrics]
         ]
       ]
+    ]
+  end
+
+  defp package do
+    [
+      name: "elixir_server_core",
+      files: ["lib", "mix.exs", "README.md", "LICENSE*"],
+      licenses: ["MIT"],
+      links: %{
+        "GitHub" => "https://github.com/DarynOngera/ElixirServerCore",
+        "Docs" => "https://hexdocs.pm/elixir_server_core"
+      }
     ]
   end
 
