@@ -83,7 +83,14 @@ defmodule Core.HTTP.BaseRouter do
       post "/jobs" do
         case conn.body_params do
           %{"payload" => payload} when is_map(payload) ->
-            {:ok, id} = Core.Workers.JobQueue.submit(payload)
+            opts = []
+
+            opts =
+              if conn.body_params["max_attempts"],
+                do: Keyword.put(opts, :max_attempts, conn.body_params["max_attempts"]),
+                else: opts
+
+            {:ok, id} = Core.Workers.JobQueue.submit(payload, opts)
 
             conn
             |> put_resp_content_type("application/json")
@@ -108,12 +115,18 @@ defmodule Core.HTTP.BaseRouter do
 
           conn
           |> put_resp_content_type("application/json")
-          |> send_resp(202, Jason.encode!(%{message: "Job scheduled", job_id: id, run_at: run_at_str}))
+          |> send_resp(
+            202,
+            Jason.encode!(%{message: "Job scheduled", job_id: id, run_at: run_at_str})
+          )
         else
           _ ->
             conn
             |> put_resp_content_type("application/json")
-            |> send_resp(400, Jason.encode!(%{error: "Required: payload (object), run_at (ISO8601 string)"}))
+            |> send_resp(
+              400,
+              Jason.encode!(%{error: "Required: payload (object), run_at (ISO8601 string)"})
+            )
         end
       end
 
@@ -150,7 +163,10 @@ defmodule Core.HTTP.BaseRouter do
         ArgumentError ->
           conn
           |> put_resp_content_type("application/json")
-          |> send_resp(400, Jason.encode!(%{error: "Invalid status. Valid: queued, running, done, failed"}))
+          |> send_resp(
+            400,
+            Jason.encode!(%{error: "Invalid status. Valid: queued, running, done, failed"})
+          )
       end
 
       get "/jobs/:id" do

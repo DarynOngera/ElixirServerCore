@@ -271,6 +271,8 @@ children = [
 
 If you need custom job processing logic:
 
+> **Contract:** Your worker module **must** implement `start_link/1` that accepts a keyword list containing `:id`. The pool passes `[id: i]` where `i` is the worker index (1..N).
+
 ```elixir
 # lib/my_music_server/music_worker.ex
 defmodule MyMusicServer.MusicWorker do
@@ -284,8 +286,10 @@ defmodule MyMusicServer.MusicWorker do
   ## Public API
   ## ============================================================
 
-  def start_link(_opts) do
-    GenServer.start_link(__MODULE__, %{}, name: __MODULE__)
+  def start_link(opts) do
+    worker_id = Keyword.get(opts, :id, 1)
+    name = :"#{__MODULE__}_#{worker_id}"
+    GenServer.start_link(__MODULE__, %{id: worker_id}, name: name)
   end
 
   ## ============================================================
@@ -293,8 +297,8 @@ defmodule MyMusicServer.MusicWorker do
   ## ============================================================
 
   @impl true
-  def init(state) do
-    Logger.info("Music Worker started")
+  def init(%{id: id} = state) do
+    Logger.info("Music Worker ##{id} started")
     schedule_work()
     {:ok, state}
   end

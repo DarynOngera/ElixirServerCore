@@ -2,6 +2,14 @@ defmodule Core.JobStore.Memory do
   @moduledoc """
   Default no-op store. Assigns VM-local monotonic IDs but does not persist.
   Jobs are lost on VM restart.
+
+  ## Note on `get_job/1`
+
+  This function intentionally returns `{:error, :not_found}` for every call.
+  The Memory store does not retain job state — it only generates IDs on
+  `insert_job/1`. The authoritative source for in-memory jobs is the
+  `Core.Workers.JobQueue` GenServer, which holds the full `%Job{}` structs
+  in its state map.
   """
   @behaviour Core.JobStore
   alias Core.Workers.Job

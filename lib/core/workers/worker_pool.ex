@@ -27,6 +27,13 @@ defmodule Core.Workers.WorkerPool do
 
     worker_module = Keyword.get(opts, :worker, Core.Workers.Worker)
 
+    Code.ensure_loaded!(worker_module)
+
+    unless function_exported?(worker_module, :start_link, 1) do
+      raise ArgumentError,
+            "#{inspect(worker_module)} must implement start_link/1 accepting [id: integer()]"
+    end
+
     Logger.info("WorkerPool starting #{size} workers (module: #{worker_module})")
 
     children =
