@@ -17,7 +17,9 @@ defmodule ElixirServerCoreTest do
     # Clean up job queue state between tests
     on_exit(fn ->
       if Process.whereis(JobQueue) != nil do
-        :sys.replace_state(JobQueue, fn _ -> %{queue: :queue.new(), jobs: %{}} end)
+        :sys.replace_state(JobQueue, fn state ->
+          %{state | queue: :queue.new(), jobs: %{}}
+        end)
       end
     end)
 

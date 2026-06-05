@@ -10,14 +10,14 @@ defmodule ElixirServerCore.Application do
   @impl true
   def start(_type, _args) do
     port = System.get_env("PORT", "4000") |> String.to_integer()
+    store = Application.get_env(:elixir_server_core, :job_store, Core.JobStore.Memory)
+    store_opts = Application.get_env(:elixir_server_core, :job_store_opts, [])
 
     children = [
-      Core.Workers.JobQueue,
+      {Core.Workers.JobQueue, store: store, store_opts: store_opts},
       Core.Workers.WorkerPool,
       {Plug.Cowboy,
-       scheme: :http,
-       plug: Core.HTTP.Router,
-       options: [port: port, ip: {0, 0, 0, 0}]}
+       scheme: :http, plug: Core.HTTP.Router, options: [port: port, ip: {0, 0, 0, 0}]}
     ]
 
     Logger.info("Starting Elixir Server Core on port #{port}")

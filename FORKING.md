@@ -184,7 +184,92 @@ defmodule MyMusicServer.Router do
 end
 ```
 
-### Step 4: Create Custom Worker (Optional)
+### Step 4: Choose a Job Store (Optional)
+
+By default jobs are kept in memory and lost on VM restart. To persist jobs across restarts, implement the `Core.JobStore` behaviour. The framework provides `Core.JobStore.SQL` helpers so you only write connection plumbing.
+
+#### Using SQLite (built-in)
+
+Add `{:exqlite, "~> 0.29"}` to your `mix.exs`, then configure:
+
+```elixir
+# config/config.exs
+config :my_music_server,
+  job_store: Core.JobStore.SQLite,
+  job_store_opts: [database: "priv/jobs.db"]
+```
+
+#### Writing a Custom SQL Adapter (e.g. PostgreSQL)
+
+```elixir
+# lib/my_music_server/job_store/postgres.ex
+defmodule MyMusicServer.JobStore.Postgres do
+  @behaviour Core.JobStore
+  alias Core.JobStore.SQL
+  alias Core.Workers.Job
+
+  def init(_opts) do
+    {table, index} = SQL.schema()
+    Postgrex.query!(conn(), table, [])
+    Postgrex.query!(conn(), index, [])
+    :ok
+  end
+
+  def insert_job(job) do
+    {sql, params} = SQL.insert_params(job)
+    %{rows: [[id]]} = Postgrex.query!(conn(), sql <> " RETURNING id", params)
+    {:ok, %Job{job | id: id}}
+  end
+
+  def update_job(id, changes) do
+    {sql, params} = SQL.update_params(id, changes)
+    Postgrex.query!(conn(), sql, params)
+    :ok
+  end
+
+  def get_job(id) do
+    %{rows: rows} = Postgrex.query!(conn(), SQL.select_by_id(), [id])
+    case rows do
+      [row | _] -> {:ok, SQL.from_row(row)}
+      []        -> {:error, :not_found}
+    end
+  end
+
+  def list_jobs(opts) do
+    {sql, params} =
+      if status = Keyword.get(opts, :status) do
+        {SQL.select_by_status(), [Atom.to_string(status)]}
+      else
+        {SQL.select_all(), []}
+      end
+
+    %{rows: rows} = Postgrex.query!(conn(), sql, params)
+    Enum.map(rows, &SQL.from_row/1)
+  end
+
+  def cleanup(opts) do
+    {sql, params} = SQL.cleanup_params(Keyword.get(opts, :max_age_days, 7))
+    Postgrex.query!(conn(), sql, params)
+    :ok
+  end
+
+  defp conn, do: MyMusicServer.Repo
+end
+```
+
+Then wire it into your supervision tree:
+
+```elixir
+# lib/my_music_server/application.ex
+children = [
+  {Core.Workers.JobQueue, store: MyMusicServer.JobStore.Postgres, store_opts: []},
+  # ... rest of your children
+]
+```
+
+---
+
+### Step 5: Create Custom Worker (Optional)
 
 If you need custom job processing logic:
 
@@ -323,7 +408,7 @@ defmodule MyMusicServer.MusicWorker do
 end
 ```
 
-### Step 5: Set Up Your Application
+### Step 6: Set Up Your Application
 
 ```elixir
 # lib/my_music_server/application.ex
@@ -364,7 +449,7 @@ defmodule MyMusicServer.Application do
 end
 ```
 
-### Step 6: Add Required Dependencies
+### Step 7: Add Required Dependencies
 
 ```elixir
 # mix.exs
@@ -379,7 +464,7 @@ defp deps do
 end
 ```
 
-### Step 7: Run Your Server
+### Step 8: Run Your Server
 
 ```bash
 mix deps.get
