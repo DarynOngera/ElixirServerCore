@@ -860,6 +860,10 @@ Then access metrics at `http://localhost:9568/metrics`
 
 Set `start_http: false` when integrating into an existing Phoenix application or when you want full control over the HTTP server.
 
+### Storage Backend Notes
+
+**SQLite throughput ceiling:** The built-in SQLite adapter opens a new connection for every operation. This is simple and stateless, but it caps throughput at roughly ~1,000 operations per second on a typical SSD. If you need higher throughput, implement a stateful `Core.JobStore` adapter that uses a connection pool (e.g., `DBConnection` with Postgrex) or keeps a single long-lived connection.
+
 ---
 
 ## Troubleshooting
