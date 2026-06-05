@@ -20,7 +20,7 @@ You can fork this to create domain-specific servers by:
 
 ## Method 1: Using as a Library (Recommended)
 
-Add `elixir_server_core` to your `mix.exs` and configure it. The framework starts automatically with your supervision tree — no need to wire GenServers manually.
+Add `servcore` to your `mix.exs` and configure it. The framework starts automatically with your supervision tree — no need to wire GenServers manually.
 
 ### Step 1: Create a New Project
 
@@ -35,7 +35,7 @@ cd my_music_server
 # mix.exs
 defp deps do
   [
-    {:elixir_server_core, "~> 0.1"}
+    {:servcore, "~> 0.1"}
     # Optional: for SQLite persistence
     # {:exqlite, "~> 0.29"}
   ]
@@ -48,7 +48,7 @@ end
 # config/config.exs
 import Config
 
-config :elixir_server_core,
+config :servcore,
   router: MyMusicServer.Router,
   port: 5000,
   worker: MyMusicServer.MusicWorker,
@@ -418,7 +418,7 @@ When using the library with config (Steps 1-3 above), the framework auto-starts.
 
 ```elixir
 # config/config.exs
-config :elixir_server_core, start_http: false, start_workers: false
+config :servcore, start_http: false, start_workers: false
 
 # lib/my_music_server/application.ex
 defmodule MyMusicServer.Application do
@@ -454,7 +454,7 @@ end
 # mix.exs
 defp deps do
   [
-    {:elixir_server_core, path: "../elixir_server_core"},
+    {:servcore, path: "../servcore"},
     {:plug_cowboy, "~> 2.7"},
     {:jason, "~> 1.4"},
     # Your domain-specific dependencies
@@ -486,7 +486,7 @@ Use this method if you need to modify core framework functionality.
 ### Step 1: Fork the Repository
 
 ```bash
-git clone https://github.com/DarynOngera/elixir_server_core.git my_music_server
+git clone https://github.com/DarynOngera/ServCore.git my_music_server
 cd my_music_server
 
 # Update remote
@@ -779,7 +779,7 @@ When using as a library, you get automatic updates:
 
 ```bash
 # Update core to latest version
-mix deps.update elixir_server_core
+mix deps.update servcore
 ```
 
 ### 4. Environment Configuration

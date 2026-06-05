@@ -5,7 +5,7 @@ defmodule Core.Workers.WorkerPool do
   Pool size defaults to the number of online schedulers (CPU cores).
   Configure via the `:worker_pool_size` application env:
 
-      config :elixir_server_core, worker_pool_size: 4
+      config :servcore, worker_pool_size: 4
 
   Or pass at startup:
 
@@ -22,7 +22,7 @@ defmodule Core.Workers.WorkerPool do
   def init(opts) do
     size =
       Keyword.get(opts, :size) ||
-        Application.get_env(:elixir_server_core, :worker_pool_size) ||
+        Application.get_env(:servcore, :worker_pool_size) ||
         System.schedulers_online()
 
     worker_module = Keyword.get(opts, :worker, Core.Workers.Worker)

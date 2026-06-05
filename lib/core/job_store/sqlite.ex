@@ -109,7 +109,7 @@ if Code.ensure_loaded?(Exqlite.Basic) do
     end
 
     defp get_db_path do
-      Application.get_env(:elixir_server_core, :job_store_opts, [])
+      Application.get_env(:servcore, :job_store_opts, [])
       |> Keyword.get(:database, "jobs.db")
     end
   end

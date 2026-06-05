@@ -1,10 +1,10 @@
 defmodule ElixirServerCore.Application do
   @moduledoc """
-  Main application supervisor. Configurable via `Application.get_env(:elixir_server_core, ...)`.
+  Main application supervisor. Configurable via `Application.get_env(:servcore, ...)`.
 
   ## Configuration options
 
-      config :elixir_server_core,
+      config :servcore,
         router: MyApp.Router,           # default: Core.HTTP.Router
         port: 4000,                     # default: env PORT or 4000
         ip: {0, 0, 0, 0},              # default: {0,0,0,0}
@@ -29,8 +29,8 @@ defmodule ElixirServerCore.Application do
     pool_size = get_pool_size()
     store = get_job_store()
     store_opts = get_job_store_opts()
-    start_http? = Application.get_env(:elixir_server_core, :start_http, true)
-    start_workers? = Application.get_env(:elixir_server_core, :start_workers, true)
+    start_http? = Application.get_env(:servcore, :start_http, true)
+    start_workers? = Application.get_env(:servcore, :start_workers, true)
 
     children = [
       {Core.Workers.JobQueue, store: store, store_opts: store_opts}
@@ -54,7 +54,7 @@ defmodule ElixirServerCore.Application do
       end
 
     if start_http? do
-      Logger.info("Starting Elixir Server Core on port #{port}")
+      Logger.info("Starting ServCore on port #{port}")
       Logger.info("http://localhost:#{port}")
     end
 
@@ -69,26 +69,26 @@ defmodule ElixirServerCore.Application do
   end
 
   defp get_router do
-    Application.get_env(:elixir_server_core, :router, Core.HTTP.Router)
+    Application.get_env(:servcore, :router, Core.HTTP.Router)
   end
 
   defp get_ip do
-    Application.get_env(:elixir_server_core, :ip, {0, 0, 0, 0})
+    Application.get_env(:servcore, :ip, {0, 0, 0, 0})
   end
 
   defp get_worker do
-    Application.get_env(:elixir_server_core, :worker, Core.Workers.Worker)
+    Application.get_env(:servcore, :worker, Core.Workers.Worker)
   end
 
   defp get_pool_size do
-    Application.get_env(:elixir_server_core, :worker_pool_size, System.schedulers_online())
+    Application.get_env(:servcore, :worker_pool_size, System.schedulers_online())
   end
 
   defp get_job_store do
-    Application.get_env(:elixir_server_core, :job_store, Core.JobStore.Memory)
+    Application.get_env(:servcore, :job_store, Core.JobStore.Memory)
   end
 
   defp get_job_store_opts do
-    Application.get_env(:elixir_server_core, :job_store_opts, [])
+    Application.get_env(:servcore, :job_store_opts, [])
   end
 end

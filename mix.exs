@@ -3,16 +3,16 @@ defmodule ElixirServerCore.MixProject do
 
   def project do
     [
-      app: :elixir_server_core,
+      app: :servcore,
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      name: "Elixir Server Core",
+      name: "ServCore",
       description:
         "A minimal, forkable Elixir server with HTTP routing, background job queueing, and pluggable persistence.",
-      source_url: "https://github.com/DarynOngera/ElixirServerCore",
-      homepage_url: "https://github.com/DarynOngera/ElixirServerCore",
+      source_url: "https://github.com/DarynOngera/ServCore",
+      homepage_url: "https://github.com/DarynOngera/ServCore",
       package: package(),
       docs: [
         main: "readme",
@@ -34,12 +34,12 @@ defmodule ElixirServerCore.MixProject do
 
   defp package do
     [
-      name: "elixir_server_core",
+      name: "servcore",
       files: ["lib", "mix.exs", "README.md", "LICENSE*"],
       licenses: ["MIT"],
       links: %{
-        "GitHub" => "https://github.com/DarynOngera/ElixirServerCore",
-        "Docs" => "https://hexdocs.pm/elixir_server_core"
+        "GitHub" => "https://github.com/DarynOngera/ServCore",
+        "Docs" => "https://hexdocs.pm/servcore"
       }
     ]
   end
