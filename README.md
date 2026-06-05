@@ -17,9 +17,13 @@ The framework emphasizes clarity over abstraction, avoiding unnecessary dependen
 * OTP supervision trees for fault tolerance
 * Background job queue with automatic worker execution
 * In-memory job tracking with full lifecycle management
+* Worker pool for concurrent job processing
+* Job scheduling (cron-like future execution)
+* Exponential backoff retries with configurable max attempts
 * Observability via Telemetry
 * Optional Prometheus + Grafana integration (not implemented)
 * RESTful API with JSON support
+* Pagination and filtering for job listings
 * Health check endpoint
 * Modular and extensible architecture
 
@@ -29,19 +33,20 @@ The framework emphasizes clarity over abstraction, avoiding unnecessary dependen
 
 ```
 Client ──HTTP──▶ Router ──▶ OTP Supervision Tree
-                               │
-                               ├── JobQueue (GenServer)
-                               │   ├── Queue: Job IDs
-                               │   └── Jobs: Job Data Map
-                               │
-                               ├── Worker (GenServer)
-                               │   └── Polls & Executes Jobs
-                               │
-                               └── Telemetry Events
-                                   │
-                                   ▼
-                              /metrics (optional)
-                              Prometheus → Grafana
+                                │
+                                ├── JobQueue (GenServer)
+                                │   ├── Queue: Job IDs
+                                │   └── Jobs: Job Data Map
+                                │
+                                ├── WorkerPool (Supervisor)
+                                │   └── Workers (GenServer) × N
+                                │       └── Poll & Execute Jobs
+                                │
+                                └── Telemetry Events
+                                    │
+                                    ▼
+                               /metrics (optional)
+                               Prometheus → Grafana
 ```
 
 ---
@@ -55,7 +60,9 @@ Jobs progress through the following states:
 3. **`:done`** - Job completed successfully with a result
 4. **`:failed`** - Job encountered an error during processing
 
-Jobs remain in the queue throughout their lifecycle, allowing you to track their complete history and status via the API. The worker polls the queue every second, claims the next available job, executes it, and updates its status accordingly.
+Jobs can also transition back to `:queued` when a retry is scheduled after a failure. Each job has a configurable `max_attempts` (default: 3) and uses exponential backoff between retries.
+
+Jobs remain in the queue throughout their lifecycle, allowing you to track their complete history and status via the API. The worker pool polls the queue, claims the next available job, executes it, and updates its status accordingly.
 
 ---
 
@@ -66,15 +73,20 @@ elixir_server_core/
 ├── lib/
 │   ├── core/
 │   │   ├── http/
-│   │   │   └── router.ex              # HTTP routing and endpoints
+│   │   │   ├── router.ex              # HTTP routing and endpoints
+│   │   │   └── base_router.ex         # Base router for forking
 │   │   ├── workers/
 │   │   │   ├── job.ex                 # Job struct definition
 │   │   │   ├── job_queue.ex           # Job queue GenServer
-│   │   │   └── worker.ex              # Background job worker
+│   │   │   ├── worker.ex              # Background job worker
+│   │   │   └── worker_pool.ex         # Worker pool supervisor
+│   │   ├── telemetry/
+│   │   │   ├── events.ex              # Telemetry event definitions
+│   │   │   └── metrics.ex             # Telemetry metrics definitions
 │   │   └── capability/                # Optional reusable capabilities
 │   │       ├── http.ex                # Alternative HTTP capability
 │   │       ├── work_queue.ex          # Work queue capability
-│   │       ├── metrics.ex             # Telemetry metrics definitions
+│   │       ├── metrics.ex             # Capability metrics
 │   │       └── server_template.ex     # Template for forked servers
 │   └── elixir_server_core/
 │       └── application.ex             # Main application supervisor
@@ -139,13 +151,15 @@ You should see:
 
 ### Overview
 
-| Method | Endpoint       | Description                          |
-|--------|---------------|--------------------------------------|
-| GET    | `/`           | Root endpoint - server status        |
-| GET    | `/health`     | Health check                         |
-| POST   | `/jobs`       | Submit a new job                     |
-| GET    | `/jobs`       | List all jobs                        |
-| GET    | `/jobs/:id`   | Get a specific job by ID             |
+| Method | Endpoint         | Description                          |
+|--------|-----------------|--------------------------------------|
+| GET    | `/`             | Root endpoint - server status        |
+| GET    | `/health`       | Health check                         |
+| GET    | `/stats`        | Job statistics                       |
+| POST   | `/jobs`         | Submit a new job                     |
+| POST   | `/jobs/schedule`| Schedule a job for future execution  |
+| GET    | `/jobs`         | List all jobs                        |
+| GET    | `/jobs/:id`     | Get a specific job by ID             |
 
 ---
 
@@ -177,13 +191,35 @@ curl http://localhost:4000/health
 ```
 
 **Response:**
-```
-OK
+```json
+{"status": "OK"}
 ```
 
 If the JobQueue process is not running, returns:
+```json
+{"status": "DEGRADED"}
 ```
-DEGRADED
+
+---
+
+#### `GET /stats` - Job Statistics
+
+Returns aggregate counts of jobs by status.
+
+**Request:**
+```bash
+curl http://localhost:4000/stats
+```
+
+**Response:**
+```json
+{
+  "queued": 2,
+  "running": 1,
+  "done": 5,
+  "failed": 0,
+  "total": 8
+}
 ```
 
 ---
@@ -214,6 +250,12 @@ curl -X POST http://localhost:4000/jobs \
 }
 ```
 
+**Optional Parameters:**
+
+| Parameter      | Type    | Description                                    |
+|---------------|---------|------------------------------------------------|
+| `max_attempts`| integer | Maximum retry attempts (default: 3)            |
+
 **Examples:**
 
 ```bash
@@ -231,13 +273,58 @@ curl -X POST http://localhost:4000/jobs \
 curl -X POST http://localhost:4000/jobs \
   -H "Content-Type: application/json" \
   -d '{"payload": {"task": "process_batch", "items": [1, 2, 3, 4, 5]}}'
+
+# With custom retry limit
+curl -X POST http://localhost:4000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"payload": {"task": "critical_task"}, "max_attempts": 5}'
+```
+
+---
+
+#### `POST /jobs/schedule` - Schedule a Job
+
+Schedules a job to run at a specific future time.
+
+**Request:**
+```bash
+curl -X POST http://localhost:4000/jobs/schedule \
+  -H "Content-Type: application/json" \
+  -d '{
+    "payload": {"task": "send_reminder"},
+    "run_at": "2025-12-31T23:59:59Z"
+  }'
+```
+
+**Response (202 Accepted):**
+```json
+{
+  "message": "Job scheduled",
+  "job_id": 456,
+  "run_at": "2025-12-31T23:59:59Z"
+}
+```
+
+**Error Response (400 Bad Request):**
+```json
+{
+  "error": "Required fields: payload (object), run_at (ISO8601)"
+}
 ```
 
 ---
 
 #### `GET /jobs` - List All Jobs
 
-Returns all jobs in the queue with their current status.
+Returns jobs in the queue with their current status. Supports filtering by status and pagination. Sorted by insertion time descending.
+
+**Query Parameters:**
+
+| Parameter  | Type    | Description                                  |
+|-----------|---------|----------------------------------------------|
+| `status`  | string  | Filter by status: `queued`, `running`, `done`, `failed` |
+| `page`    | integer | Page number (default: 1)                     |
+| `per_page`| integer | Items per page, max 200 (default: 50)      |
 
 **Request:**
 ```bash
@@ -286,14 +373,23 @@ curl http://localhost:4000/jobs
 curl http://localhost:4000/jobs | jq
 ```
 
-**Filter by Status (using jq):**
+**Filter by Status (API query parameter):**
 ```bash
 # Show only completed jobs
-curl -s http://localhost:4000/jobs | jq '[.[] | select(.status == "done")]'
+curl "http://localhost:4000/jobs?status=done"
 
 # Show only running jobs
-curl -s http://localhost:4000/jobs | jq '[.[] | select(.status == "running")]'
+curl "http://localhost:4000/jobs?status=running"
+```
 
+**Pagination:**
+```bash
+# Get page 2 with 10 items per page
+curl "http://localhost:4000/jobs?page=2&per_page=10"
+```
+
+**Filter by Status (using jq):**
+```bash
 # Count jobs by status
 curl -s http://localhost:4000/jobs | jq 'group_by(.status) | map({status: .[0].status, count: length})'
 ```
@@ -366,10 +462,16 @@ curl -X POST http://localhost:4000/jobs \
   -H "Content-Type: application/json" \
   -d '{"payload": {"task": "send_notifications"}}'
 
-# Submit job 3
+# Submit job 3 with custom retry limit
 curl -X POST http://localhost:4000/jobs \
   -H "Content-Type: application/json" \
-  -d '{"payload": {"task": "generate_reports"}}'
+  -d '{"payload": {"task": "generate_reports"}, "max_attempts": 5}'
+
+# Schedule a job for tomorrow
+RUN_AT=$(date -u -d '+1 day' +%Y-%m-%dT%H:%M:%SZ)
+curl -X POST http://localhost:4000/jobs/schedule \
+  -H "Content-Type: application/json" \
+  -d "{\"payload\": {\"task\": \"daily_cleanup\"}, \"run_at\": \"$RUN_AT\"}"
 ```
 
 ### 2. Monitor Job Progress
@@ -377,6 +479,9 @@ curl -X POST http://localhost:4000/jobs \
 ```bash
 # List all jobs
 curl http://localhost:4000/jobs | jq
+
+# Quick stats overview
+curl http://localhost:4000/stats | jq
 
 # Watch jobs in real-time (refresh every 2 seconds)
 watch -n 2 'curl -s http://localhost:4000/jobs | jq'
@@ -440,10 +545,14 @@ echo "=== Testing Elixir Server Core API ==="
 echo
 
 echo "1. Health Check"
-curl -s http://localhost:4000/health
-echo -e "\n"
+curl -s http://localhost:4000/health | jq
+echo
 
-echo "2. Submit Job 1"
+echo "2. Stats"
+curl -s http://localhost:4000/stats | jq
+echo
+
+echo "3. Submit Job 1"
 JOB1=$(curl -s -X POST http://localhost:4000/jobs \
   -H "Content-Type: application/json" \
   -d '{"payload": {"task": "test_job_1"}}')
@@ -451,27 +560,34 @@ echo $JOB1 | jq
 JOB1_ID=$(echo $JOB1 | jq -r '.job_id')
 echo
 
-echo "3. Submit Job 2"
+echo "4. Submit Job 2"
 JOB2=$(curl -s -X POST http://localhost:4000/jobs \
   -H "Content-Type: application/json" \
-  -d '{"payload": {"task": "test_job_2", "priority": "high"}}')
+  -d '{"payload": {"task": "test_job_2"}, "max_attempts": 5}')
 echo $JOB2 | jq
 JOB2_ID=$(echo $JOB2 | jq -r '.job_id')
 echo
 
-echo "4. Wait for processing..."
+echo "5. Schedule Future Job"
+RUN_AT=$(date -u -d '+1 hour' +%Y-%m-%dT%H:%M:%SZ)
+curl -s -X POST http://localhost:4000/jobs/schedule \
+  -H "Content-Type: application/json" \
+  -d "{\"payload\": {\"task\": \"future_job\"}, \"run_at\": \"$RUN_AT\"}" | jq
+echo
+
+echo "6. Wait for processing..."
 sleep 2
 echo
 
-echo "5. Get All Jobs"
+echo "7. Get All Jobs"
 curl -s http://localhost:4000/jobs | jq
 echo
 
-echo "6. Get Job 1 Details"
+echo "8. Get Job 1 Details"
 curl -s http://localhost:4000/jobs/$JOB1_ID | jq
 echo
 
-echo "7. Get Job 2 Details"
+echo "9. Get Job 2 Details"
 curl -s http://localhost:4000/jobs/$JOB2_ID | jq
 echo
 
@@ -567,7 +683,8 @@ end
 - **Serialized Access**: Ensures thread-safe operations on the queue
 - **State Management**: Natural fit for maintaining queue and job state
 - **Supervision**: Automatic restart on crashes
-- **Telemetry Integration**: Easy to add metrics and monitoring
+- **Telemetry Integration**: Built-in metrics and monitoring
+- **Retry Logic**: Centralized handling of exponential backoff and re-enqueueing
 
 ### Why Keep Jobs in Queue?
 
@@ -601,20 +718,17 @@ This dual structure allows:
 ### Current Limitations
 
 - **In-Memory Only**: Jobs are lost on server restart
-- **No Pagination**: `/jobs` endpoint returns all jobs
-- **Single Worker**: Only one job processes at a time
-- **Polling Overhead**: Worker polls every second
+- **Polling Overhead**: Workers poll every second
+- **No Job Priorities**: All jobs are processed FIFO
 
 ### Scaling Strategies
 
 For production deployments, consider:
 
 1. **Persistent Storage**: Add PostgreSQL or Redis for job persistence
-2. **Multiple Workers**: Spawn worker pool for parallel processing
-3. **Pagination**: Add query parameters to `/jobs` endpoint
-4. **Job Cleanup**: Archive completed jobs after N days
-5. **Priority Queue**: Implement job prioritization
-6. **Distributed Queue**: Use RabbitMQ or Kafka for distributed systems
+2. **Job Cleanup**: Archive completed jobs after N days
+3. **Priority Queue**: Implement job prioritization
+4. **Distributed Queue**: Use RabbitMQ or Kafka for distributed systems
 
 ---
 
@@ -663,9 +777,9 @@ The following telemetry events are emitted:
 
 - `[:server, :http, :start]` - HTTP request started
 - `[:server, :http, :stop]` - HTTP request completed
-- `[:core, :job, :start]` - Job execution started (not yet implemented)
-- `[:core, :job, :stop]` - Job execution completed (not yet implemented)
-- `[:core, :job, :error]` - Job execution failed (not yet implemented)
+- `[:core, :job, :start]` - Job execution started
+- `[:core, :job, :stop]` - Job execution completed
+- `[:core, :job, :error]` - Job execution failed
 
 ### Adding Prometheus Integration
 
