@@ -3,17 +3,17 @@ defmodule Core.JobStore.SQLiteTest do
   alias Core.Workers.{Job, JobQueue}
   alias Core.JobStore.SQLite
 
-  @db_path "/tmp/elixir_server_core_test_#{System.unique_integer([:positive])}.db"
+  @db_path "/tmp/servcore_test_#{System.unique_integer([:positive])}.db"
 
   setup do
     # Clean up any stale file
     File.rm(@db_path)
-    Application.put_env(:elixir_server_core, :job_store_opts, database: @db_path)
+    Application.put_env(:servcore, :job_store_opts, database: @db_path)
     :ok = SQLite.init(database: @db_path)
 
     on_exit(fn ->
       File.rm(@db_path)
-      Application.delete_env(:elixir_server_core, :job_store_opts)
+      Application.delete_env(:servcore, :job_store_opts)
     end)
 
     :ok
@@ -152,12 +152,12 @@ defmodule Core.JobStore.SQLiteTest do
 
   describe "JobQueue integration" do
     test "jobs survive a simulated VM restart" do
-      db = "/tmp/elixir_server_core_restart_test_#{System.unique_integer([:positive])}.db"
+      db = "/tmp/servcore_restart_test_#{System.unique_integer([:positive])}.db"
       File.rm(db)
       on_exit(fn -> File.rm(db) end)
 
       # Use an unnamed JobQueue so we don't conflict with the global one
-      Application.put_env(:elixir_server_core, :job_store_opts, database: db)
+      Application.put_env(:servcore, :job_store_opts, database: db)
       {:ok, pid} = GenServer.start_link(JobQueue, store: SQLite, store_opts: [database: db])
 
       # Submit a job directly via GenServer.call
