@@ -1,4 +1,24 @@
 defmodule Core.Workers.Job do
+
+  @moduledoc """
+Immutable job record that flows through the queue lifecycle.
+
+## Fields
+
+- `:id` — Monotonically increasing positive integer, unique per VM boot.
+- `:payload` — Arbitrary map supplied by the caller at submission time.
+- `:status` — One of `:queued`, `:running`, `:done`, `:failed`.
+- `:attempt` — Number of times this job has been claimed by a worker (starts at 0).
+- `:max_attempts` — Total claim attempts before the job is permanently failed (default: 3).
+- `:retry_at` — When the next retry is scheduled. `nil` unless job is waiting to retry.
+- `:inserted_at`, `:started_at`, `:finished_at` — UTC timestamps for each lifecycle stage.
+
+## Lifecycle
+
+    :queued → :running → :done
+                       ↘ :failed (retries_exhausted? or unrecoverable)
+                       ↘ :queued (retry scheduled via backoff)
+"""
   @derive Jason.Encoder
   @enforce_keys [:id, :payload, :inserted_at]
   defstruct [
