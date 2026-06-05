@@ -1,19 +1,59 @@
 # Elixir Server Core
 
-**Build small, durable background-processing services in Elixir without Phoenix or Oban.**
+Build durable background-processing services in Elixir without the complexity of a full application framework.
 
-Elixir Server Core is a minimal, forkable toolkit for background-job services. It gives you HTTP endpoints, supervised workers, pluggable job persistence, and observability — the primitives you actually need, without the parts you don't.
+Elixir Server Core is a lightweight toolkit for building standalone worker services. It combines HTTP endpoints, supervised job execution, pluggable persistence, retries, scheduling, and observability into a minimal foundation that you can use as a library or fork as a starting point.
 
-**Typical use cases:**
+Whether you're building a PDF conversion service, media-processing pipeline, webhook receiver, or automation backend, Elixir Server Core provides the essential infrastructure while staying close to OTP principles.
 
-- **Specialized worker services** — media transcoding, PDF processing, webhook ingestion
-- **Single-node deployments** — SQLite-backed durability on a small VPS or embedded device
-- **Learning OTP** — assemble a production system from GenServer, Supervisors, and Behaviours
-- **Forking** — clone, swap in your domain logic, and ship
+## Typical Use Cases
 
-**The problem:** Background-processing services in Elixir usually pull in Phoenix or Oban. That's overkill when you just need an HTTP entry point, a job queue, retries, and maybe a SQLite file for durability across restarts.
+- **Media processing** — video transcoding, image resizing, thumbnail generation
+- **Document workflows** — PDF optimization, OCR, format conversion
+- **Webhook ingestion** — receive requests and process them asynchronously
+- **Automation services** — scheduled jobs, background tasks, integrations
+- **Single-node deployments** — SQLite-backed durability on a VPS, edge device, or homelab server
+- **Learning OTP** — understand how job queues, workers, supervision trees, and retries are implemented
 
-**The solution:** Fork this repo or add it as a dependency. Configure your router and worker module. The core handles the rest — HTTP via Plug + Cowboy, job lifecycle via OTP supervision, exponential backoff retries, and Telemetry. Storage is pluggable: in-memory for prototyping, SQLite for single-node durability, or any SQL database via the `Core.JobStore` behaviour.
+## Why Not Phoenix + Oban?
+
+Phoenix and Oban are excellent tools and should be the default choice for many production systems.
+
+Elixir Server Core targets a different use case: standalone worker services where you don't need a full web application, database layer, or distributed job-processing platform.
+
+If your service only needs:
+
+- HTTP endpoints
+- A durable job queue
+- Worker supervision
+- Retries and scheduling
+- Basic observability
+
+Then a smaller toolkit can be easier to understand, customize, and deploy.
+
+## The Problem
+
+Many background-processing services start with a simple requirement:
+
+> Accept work, queue it, process it, retry failures, and survive restarts.
+
+Achieving that often means assembling multiple libraries or adopting a larger framework than the problem requires.
+
+## The Solution
+
+Elixir Server Core provides the building blocks for specialized worker services:
+
+- **Plug + Cowboy** for HTTP endpoints
+- **OTP supervision trees** for fault tolerance
+- **Background job queues** with worker pools
+- **Exponential backoff retries**
+- **Job scheduling**
+- **Telemetry instrumentation**
+- **Pluggable persistence**
+
+Use in-memory storage for rapid prototyping, SQLite for lightweight durability, or implement the `Core.JobStore` behaviour to integrate with your preferred database.
+
+The result is a small, understandable foundation that stays close to Elixir's strengths while remaining easy to extend, fork, and deploy.
 
 ---
 
@@ -42,10 +82,10 @@ Elixir Server Core is a minimal, forkable toolkit for background-job services. I
 
 ```elixir
 # mix.exs
-{:elixir_server_core, "~> 0.1"}
+{:servcore, "~> 0.1"}
 
 # config/config.exs
-config :elixir_server_core,
+config :servcore,
   router: MyApp.Router,
   port: 4000,
   job_store: Core.JobStore.SQLite,
@@ -58,7 +98,7 @@ The framework auto-starts `JobQueue`, `WorkerPool`, and `Plug.Cowboy` with your 
 
 ```elixir
 # config/config.exs
-config :elixir_server_core, start_http: false
+config :servcore, start_http: false
 
 # application.ex
 children = [
@@ -161,7 +201,7 @@ elixir_server_core/
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd elixir_server_core
+cd servcore
 
 # Install dependencies
 mix deps.get
