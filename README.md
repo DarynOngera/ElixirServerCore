@@ -1,12 +1,10 @@
 # Elixir Server Core
 
-An **open-source, production-oriented Elixir HTTP server framework** designed with **reliability, observability, and modular architecture** as first-class concerns. This framework can be forked to create specialized servers, such as Music servers, PDF servers, or custom domain-specific services.
+A **minimal, forkable Elixir server** with HTTP routing, background job queueing, and optional SQLite persistence — no Phoenix, no Oban, just the primitives you need for domain-specific services.
 
-At its core, the system leverages **Elixir and OTP supervision trees** to ensure fault isolation and automatic recovery from failures. Application components such as the HTTP server and background workers are supervised independently, allowing the system to remain available even when individual processes crash.
+**The problem:** Building a specialized server (a music converter, a PDF processor, a webhook relay) usually means stripping down a web framework or wiring GenServers from scratch. You don't need all of Phoenix. You just need HTTP endpoints, a job queue, retries, and maybe durability across restarts.
 
-Observability is designed into the framework, with **Telemetry** instrumentation for request and job events. Metrics can optionally be exposed via **Prometheus** and visualized using **Grafana** (integration not yet implemented), providing a foundation for real-time operational insight in forked servers.
-
-The framework emphasizes clarity over abstraction, avoiding unnecessary dependencies while adhering to backend best practices. Its modular design allows extension into specialized servers, distributed systems, alerting pipelines, or containerized deployments.
+**The solution:** Fork this repo, write your domain logic, and deploy. The core handles HTTP with Plug + Cowboy, job lifecycle with OTP supervision, exponential backoff retries, and Telemetry observability. Storage is pluggable: in-memory for prototyping, SQLite for single-node durability, or any SQL database via the `Core.JobStore` behaviour.
 
 ---
 
