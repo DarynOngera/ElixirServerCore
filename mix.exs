@@ -7,7 +7,21 @@ defmodule ElixirServerCore.MixProject do
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
-      deps: deps()
+      deps: deps(),
+
+      name: "Elixir Server Core",
+      source_url: "https://github.com/DarynOngera/ElixirServerCore",
+      homepage_url: "https://github.com/DarynOngera/ElixirServerCore",
+      docs: [
+        main: "readme",
+        extras: ["README.md", "FORKING.md", "ENDPOINT_TEST.md"],
+        groups_for_modules: [
+          "HTTP Layer": [Core.HTTP.Router, Core.HTTP.BaseRouter],
+          "Job System": [Core.Workers.Job, Core.Workers.JobQueue, Core.Workers.Worker, Core.Workers.WorkerPool],
+          "Capabilities": [Core.Capability.HTTP, Core.Capability.WorkQueue, Core.ServerTemplate],
+          "Telemetry": [Core.Telemetry.Events, Core.Telemetry.Metrics, Core.Capability.Metrics]
+        ]
+      ]
     ]
   end
 
@@ -32,7 +46,8 @@ defmodule ElixirServerCore.MixProject do
         # {:postgrex, "~> 0.17"},
         # {:ecto_sql, "~> 3.10"},
         # Test/dev only 
-       {:stream_data, "~> 0.6", only: [:test, :dev]}
+       {:stream_data, "~> 0.6", only: [:test, :dev]},
+       {:ex_doc, "~> 0.34", only: :dev, runtime: false}
     ]
   end
 end
