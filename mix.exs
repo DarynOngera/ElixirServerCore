@@ -4,7 +4,7 @@ defmodule ElixirServerCore.MixProject do
   def project do
     [
       app: :servcore,
-      version: "0.1.0",
+      version: "0.2.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
@@ -58,7 +58,7 @@ defmodule ElixirServerCore.MixProject do
       {:telemetry, "~> 1.2"},
       {:telemetry_metrics, "~> 0.6"},
       # HTTP server
-      {:plug_cowboy, "~> 2.7"},
+      {:bandit, "~> 1.8"},
       {:jason, "~> 1.4"},
       # Optional: uncomment for Prometheus integration
       # {:telemetry_metrics_prometheus, "~> 1.1"},
