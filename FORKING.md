@@ -434,10 +434,12 @@ defmodule MyMusicServer.Application do
         store: Core.JobStore.SQLite,
         store_opts: [database: "priv/jobs.db"]},
       {Core.Workers.WorkerPool, worker: MyMusicServer.MusicWorker, size: 4},
-      {Plug.Cowboy,
-        scheme: :http,
+      {Bandit,
         plug: MyMusicServer.Router,
-        options: [port: port, ip: {0, 0, 0, 0}]},
+        scheme: :http,
+        port: port,
+        ip: {0, 0, 0, 0},
+        http_2_options: [enabled: true]},
       MyMusicServer.Library,
       MyMusicServer.Player
     ]
@@ -455,7 +457,7 @@ end
 defp deps do
   [
     {:servcore, path: "../servcore"},
-    {:plug_cowboy, "~> 2.7"},
+    {:bandit, "~> 1.8"},
     {:jason, "~> 1.4"},
     # Your domain-specific dependencies
     {:id3, "~> 1.0"}  # Example: MP3 metadata parsing
@@ -503,7 +505,7 @@ defmodule MyMusicServer.MixProject do
 
   def project do
     [
-      app: :my_music_server,  # Changed from :elixir_server_core
+      app: :my_music_server,  # Changed from :servcore
       version: "0.1.0",
       elixir: "~> 1.14",
       start_permanent: Mix.env() == :prod,
@@ -522,7 +524,7 @@ defmodule MyMusicServer.MixProject do
     [
       {:telemetry, "~> 1.2"},
       {:telemetry_metrics, "~> 0.6"},
-      {:plug_cowboy, "~> 2.7"},
+      {:bandit, "~> 1.8"},
       {:jason, "~> 1.4"},
       # Add your deps here
     ]
@@ -857,7 +859,7 @@ PORT=5001 mix run --no-halt
 ### Issue: Routes not working
 
 **Check:**
-1. Router is passed to Plug.Cowboy correctly
+1. Router is passed to Bandit correctly
 2. Routes are defined before `match _` catch-all
 3. Plugs are in correct order
 

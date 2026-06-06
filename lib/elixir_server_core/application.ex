@@ -15,7 +15,7 @@ defmodule ElixirServerCore.Application do
         start_http: true,               # default: true
         start_workers: true             # default: true
 
-  Set `start_http: false` to manage Plug.Cowboy yourself (e.g. in a Phoenix app).
+  Set `start_http: false` to manage the HTTP server yourself (e.g. in a Phoenix app).
   """
   use Application
   require Logger
@@ -46,7 +46,8 @@ defmodule ElixirServerCore.Application do
     children =
       if start_http? do
         http_spec =
-          {Plug.Cowboy, scheme: :http, plug: router, options: [port: port, ip: ip]}
+          {Bandit,
+           plug: router, scheme: :http, port: port, ip: ip, http_2_options: [enabled: true]}
 
         [http_spec | children]
       else

@@ -43,7 +43,7 @@ Achieving that often means assembling multiple libraries or adopting a larger fr
 
 Elixir Server Core provides the building blocks for specialized worker services:
 
-- **Plug + Cowboy** for HTTP endpoints
+- **Bandit** for HTTP endpoints
 - **OTP supervision trees** for fault tolerance
 - **Background job queues** with worker pools
 - **Exponential backoff retries**
@@ -60,7 +60,7 @@ The result is a small, understandable foundation that stays close to Elixir's st
 ## Features
 
 * Forkable server framework for domain-specific services
-* HTTP server using Plug + Cowboy
+* HTTP server using Bandit
 * OTP supervision trees for fault tolerance
 * Background job queue with automatic worker execution
 * In-memory job tracking with full lifecycle management
@@ -92,7 +92,7 @@ config :servcore,
   job_store_opts: [database: "priv/jobs.db"]
 ```
 
-The framework auto-starts `JobQueue`, `WorkerPool`, and `Plug.Cowboy` with your router.
+The framework auto-starts `JobQueue`, `WorkerPool`, and `Bandit` with your router.
 
 ### Manual Supervision (library, full control)
 
@@ -104,7 +104,7 @@ config :servcore, start_http: false
 children = [
   {Core.Workers.JobQueue, store: Core.JobStore.SQLite, store_opts: [database: "jobs.db"]},
   {Core.Workers.WorkerPool, worker: MyApp.Worker, size: 4},
-  {Plug.Cowboy, scheme: :http, plug: MyApp.Router, options: [port: 4000]}
+  {Bandit, plug: MyApp.Router, scheme: :http, port: 4000, http_2_options: [enabled: true]}
 ]
 ```
 
@@ -154,7 +154,7 @@ Jobs remain in the queue throughout their lifecycle, allowing you to track their
 ## Project Structure
 
 ```text
-elixir_server_core/
+servcore/
 ├── lib/
 │   ├── core/
 │   │   ├── http/
@@ -200,7 +200,7 @@ elixir_server_core/
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/DarynOngera/ServCore.git
 cd servcore
 
 # Install dependencies
@@ -705,10 +705,11 @@ defmodule MyMusicServer.Application do
       Core.Workers.Worker,
       
       # Custom HTTP router with music-specific endpoints
-      {Plug.Cowboy, 
-        scheme: :http, 
-        plug: MyMusicServer.Router, 
-        options: [port: 5000]
+      {Bandit,
+        plug: MyMusicServer.Router,
+        scheme: :http,
+        port: 5000,
+        http_2_options: [enabled: true]
       },
       
       # Add your domain-specific services
@@ -894,7 +895,7 @@ Then access metrics at `http://localhost:9568/metrics`
 | `:worker_pool_size` | integer | CPU cores | Number of concurrent workers |
 | `:job_store` | module | `Core.JobStore.Memory` | Persistence backend |
 | `:job_store_opts` | keyword | `[]` | Options passed to the store |
-| `:start_http` | boolean | `true` | Start `Plug.Cowboy` automatically |
+| `:start_http` | boolean | `true` | Start `Bandit` automatically |
 | `:start_workers` | boolean | `true` | Start `WorkerPool` automatically |
 
 Set `start_http: false` when integrating into an existing Phoenix application or when you want full control over the HTTP server.
