@@ -23,7 +23,7 @@ defmodule Core.Workers.Worker do
   alias Core.Workers.JobQueue
   alias Core.Telemetry.Events
 
-  # 1 second
+  # 1 second fallback poll interval
   @poll_interval 1_000
 
   ## ============================================================
@@ -49,11 +49,15 @@ defmodule Core.Workers.Worker do
 
   @impl true
   def handle_info(:work, state) do
-    case JobQueue.claim_next() do
-      {:ok, job} -> execute(job, state)
-      :empty -> :noop
-    end
+    do_work(state)
+    schedule_work()
+    {:noreply, state}
+  end
 
+  @impl true
+  def handle_info(:work_available, state) do
+    # Woken by JobQueue when new work is available — try immediately
+    do_work(state)
     schedule_work()
     {:noreply, state}
   end
@@ -64,6 +68,13 @@ defmodule Core.Workers.Worker do
 
   defp schedule_work do
     Process.send_after(self(), :work, @poll_interval)
+  end
+
+  defp do_work(state) do
+    case JobQueue.claim_next() do
+      {:ok, job} -> execute(job, state)
+      :empty -> :noop
+    end
   end
 
   defp execute(job, %{id: worker_id}) do
@@ -87,7 +98,14 @@ defmodule Core.Workers.Worker do
         %{job_id: job.id}
       )
 
-      JobQueue.mark_done(job.id, result)
+      # Protect against JobQueue being down during supervisor shutdown
+      try do
+        JobQueue.mark_done(job.id, result)
+      catch
+        :exit, {:noproc, _} ->
+          Logger.warning("Worker ##{worker_id} could not mark_done: JobQueue is down")
+      end
+
       Logger.info("Worker ##{worker_id} completed job #{job.id} in #{native_to_ms(duration)}ms")
     rescue
       error ->
@@ -106,7 +124,14 @@ defmodule Core.Workers.Worker do
         }
 
         Logger.error("Worker ##{worker_id} failed job #{job.id}: #{message}")
-        JobQueue.mark_failed(job.id, error_details)
+
+        # Protect against JobQueue being down during supervisor shutdown
+        try do
+          JobQueue.mark_failed(job.id, error_details)
+        catch
+          :exit, {:noproc, _} ->
+            Logger.warning("Worker ##{worker_id} could not mark_failed: JobQueue is down")
+        end
     end
   end
 

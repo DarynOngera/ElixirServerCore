@@ -19,7 +19,8 @@ erl_crash.dump
 # Also ignore archive artifacts (built via "mix archive.build").
 *.ez
 
-# Ignore package tarball (built via "mix hex.build").
+# Ignore package tarballs (built via "mix hex.build").
+servcore-*.tar
 elixir_server_core-*.tar
 
 # Temporary files, for example, from tests.
@@ -29,3 +30,6 @@ elixir_server_core-*.tar
 _build/
 deps/
 erl_crash.dump
+
+# SQLite databases
+*.db

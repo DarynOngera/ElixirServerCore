@@ -7,9 +7,9 @@ defmodule Core.ServerTemplate do
 
   @impl true
   def start(_type, _args) do
-    port          = System.get_env("PORT", "4000") |> String.to_integer()
-    router        = Application.get_env(:my_app, :router, Core.HTTP.Router)
-    worker_module = Application.get_env(:my_app, :worker, Core.Workers.Worker)
+    port = System.get_env("PORT", "4000") |> String.to_integer()
+    router = Application.get_env(:servcore, :router, Core.HTTP.Router)
+    worker_module = Application.get_env(:servcore, :worker, Core.Workers.Worker)
 
     children = [
       Core.Workers.JobQueue,

@@ -4,6 +4,10 @@ defmodule Core.Workers.JobQueue do
   require Logger
   alias Core.Workers.Job
 
+  @default_cleanup_interval_ms :timer.hours(1)
+  @default_max_age_days 7
+  @max_dequeue_scan 1000
+
   ## ============================================================
   ## Client API
   ## ============================================================
@@ -88,6 +92,13 @@ defmodule Core.Workers.JobQueue do
     GenServer.call(__MODULE__, :stats)
   end
 
+  @doc """
+  Reset the queue — clears all in-memory state. Intended for test use only.
+  """
+  def reset do
+    GenServer.call(__MODULE__, :reset)
+  end
+
   ## ============================================================
   ## GenServer Callbacks
   ## ============================================================
@@ -96,6 +107,8 @@ defmodule Core.Workers.JobQueue do
   def init(opts) do
     store = Keyword.get(opts, :store, Core.JobStore.Memory)
     store_opts = Keyword.get(opts, :store_opts, [])
+    cleanup_interval = Keyword.get(opts, :cleanup_interval_ms, @default_cleanup_interval_ms)
+    max_age_days = Keyword.get(opts, :max_age_days, @default_max_age_days)
 
     :ok = store.init(store_opts)
 
@@ -137,7 +150,18 @@ defmodule Core.Workers.JobQueue do
       Process.send_after(self(), {:enqueue_delayed, job.id}, delay_ms)
     end)
 
-    {:ok, %{queue: queue, jobs: jobs_map, store: store, store_opts: store_opts}}
+    # Schedule periodic cleanup
+    schedule_cleanup(cleanup_interval)
+
+    {:ok,
+     %{
+       queue: queue,
+       jobs: jobs_map,
+       store: store,
+       store_opts: store_opts,
+       cleanup_interval_ms: cleanup_interval,
+       max_age_days: max_age_days
+     }}
   end
 
   @impl true
@@ -146,6 +170,9 @@ defmodule Core.Workers.JobQueue do
 
     updated_queue = :queue.in(job.id, queue)
     updated_jobs = Map.put(jobs, job.id, job)
+
+    # Wake all idle workers immediately
+    notify_workers()
 
     {:reply, {:ok, job.id}, %{state | queue: updated_queue, jobs: updated_jobs}}
   end
@@ -313,6 +340,13 @@ defmodule Core.Workers.JobQueue do
   end
 
   @impl true
+  def handle_call(:reset, _from, %{store: store, store_opts: store_opts} = state) do
+    store.cleanup(max_age_days: 0)
+    :ok = store.init(store_opts)
+    {:reply, :ok, %{state | queue: :queue.new(), jobs: %{}}}
+  end
+
+  @impl true
   def handle_info({:enqueue_delayed, id}, %{queue: queue} = state) do
     # Job already persisted; just add its id to the in-memory queue
     {:noreply, %{state | queue: :queue.in(id, queue)}}
@@ -323,12 +357,29 @@ defmodule Core.Workers.JobQueue do
     case Map.get(jobs, id) do
       %Job{status: :queued} = _job ->
         updated_queue = :queue.in(id, queue)
+        # Wake workers so the retry is picked up immediately
+        notify_workers()
         {:noreply, %{state | queue: updated_queue}}
 
       _ ->
         # Job may have been cancelled or already processed
         {:noreply, state}
     end
+  end
+
+  @impl true
+  def handle_info(
+        :cleanup,
+        %{
+          store: store,
+          store_opts: _store_opts,
+          max_age_days: max_age_days,
+          cleanup_interval_ms: interval
+        } = state
+      ) do
+    :ok = store.cleanup(max_age_days: max_age_days)
+    schedule_cleanup(interval)
+    {:noreply, state}
   end
 
   @impl true
@@ -357,10 +408,15 @@ defmodule Core.Workers.JobQueue do
   ## ============================================================
 
   # Pops from the front of the queue until a :queued job is found.
-  # Returns {:ok, job_id, remaining_queue} or :empty.
-  # This is O(1) for the happy path (front of queue is :queued).
+  # Bounded scan — discards at most @max_dequeue_scan stale entries.
+  defp dequeue_next_queued(queue, jobs, scanned \\ 0)
 
-  defp dequeue_next_queued(queue, jobs) do
+  defp dequeue_next_queued(_queue, _jobs, scanned) when scanned >= @max_dequeue_scan do
+    Logger.warning("JobQueue dequeue scan exceeded #{@max_dequeue_scan} stale entries")
+    :empty
+  end
+
+  defp dequeue_next_queued(queue, jobs, scanned) do
     case :queue.out(queue) do
       {:empty, _} ->
         :empty
@@ -371,8 +427,23 @@ defmodule Core.Workers.JobQueue do
             {:ok, job_id, remaining}
 
           _ ->
-            dequeue_next_queued(remaining, jobs)
+            dequeue_next_queued(remaining, jobs, scanned + 1)
         end
     end
+  end
+
+  defp notify_workers do
+    # Notify all worker processes under WorkerPool supervisor
+    if pid = Process.whereis(Core.Workers.WorkerPool) do
+      for {_, child_pid, :worker, _} <- Supervisor.which_children(pid), is_pid(child_pid) do
+        send(child_pid, :work_available)
+      end
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp schedule_cleanup(interval_ms) do
+    Process.send_after(self(), :cleanup, interval_ms)
   end
 end
