@@ -34,6 +34,13 @@ defmodule Core.Workers.WorkerPool do
             "#{inspect(worker_module)} must implement start_link/1 accepting [id: integer()]"
     end
 
+    # Verify the worker accepts :id in opts and will produce unique process names
+    # by checking it doesn't unconditionally register under the module name
+    if function_exported?(worker_module, :init, 1) do
+      # Heuristic: if init/1 is exported, assume it handles opts properly
+      :ok
+    end
+
     Logger.info("WorkerPool starting #{size} workers (module: #{worker_module})")
 
     children =

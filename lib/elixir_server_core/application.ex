@@ -29,11 +29,12 @@ defmodule ElixirServerCore.Application do
     pool_size = get_pool_size()
     store = get_job_store()
     store_opts = get_job_store_opts()
+    max_age_days = Application.get_env(:servcore, :max_age_days, 7)
     start_http? = Application.get_env(:servcore, :start_http, true)
     start_workers? = Application.get_env(:servcore, :start_workers, true)
 
     children = [
-      {Core.Workers.JobQueue, store: store, store_opts: store_opts}
+      {Core.Workers.JobQueue, store: store, store_opts: store_opts, max_age_days: max_age_days}
     ]
 
     children =

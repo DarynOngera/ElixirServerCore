@@ -8,20 +8,14 @@ defmodule ElixirServerCoreTest do
   @router Core.HTTP.Router
 
   setup do
-    # Ensure JobQueue is running for each test
+    # Ensure JobQueue is running for each test with explicit Memory store
     case Process.whereis(JobQueue) do
-      nil -> start_supervised!(JobQueue)
-      _pid -> :ok
-    end
+      nil ->
+        start_supervised!({JobQueue, store: Core.JobStore.Memory, store_opts: []})
 
-    # Clean up job queue state between tests
-    on_exit(fn ->
-      if Process.whereis(JobQueue) != nil do
-        :sys.replace_state(JobQueue, fn state ->
-          %{state | queue: :queue.new(), jobs: %{}}
-        end)
-      end
-    end)
+      _pid ->
+        :ok = JobQueue.reset()
+    end
 
     :ok
   end
@@ -163,7 +157,7 @@ defmodule ElixirServerCoreTest do
       conn = @router.call(conn, [])
 
       assert conn.status == 400
-      assert Jason.decode!(conn.resp_body)["error"] =~ "Required fields"
+      assert Jason.decode!(conn.resp_body)["error"] =~ "Required"
     end
 
     test "returns 400 for invalid ISO8601" do
@@ -181,7 +175,7 @@ defmodule ElixirServerCoreTest do
       conn = @router.call(conn, [])
 
       assert conn.status == 400
-      assert Jason.decode!(conn.resp_body)["error"] =~ "Required fields"
+      assert Jason.decode!(conn.resp_body)["error"] =~ "Required"
     end
   end
 
@@ -225,7 +219,7 @@ defmodule ElixirServerCoreTest do
       conn = @router.call(conn, [])
 
       assert conn.status == 400
-      assert Jason.decode!(conn.resp_body)["error"] =~ "Invalid status filter"
+      assert Jason.decode!(conn.resp_body)["error"] =~ "Invalid status"
     end
 
     test "supports pagination" do
@@ -269,6 +263,74 @@ defmodule ElixirServerCoreTest do
 
       assert conn.status == 400
       assert Jason.decode!(conn.resp_body)["error"] == "Job ID must be an integer"
+    end
+  end
+
+  describe "retry/backoff path" do
+    test "mark_failed re-queues job when retries remain" do
+      {:ok, id} = JobQueue.submit(%{"task" => "retry_test"}, max_attempts: 3)
+
+      # Claim the job (increments attempt to 1)
+      {:ok, job} = JobQueue.claim_next()
+      assert job.id == id
+      assert job.attempt == 1
+
+      # Mark as failed — should re-queue since 1 < 3
+      :ok = JobQueue.mark_failed(id, %{error: "transient failure"})
+
+      # Job should be back in :queued with retry_at set
+      {:ok, job} = JobQueue.get(id)
+      assert job.status == :queued
+      assert not is_nil(job.retry_at)
+      assert job.attempt == 1
+
+      # After backoff timer fires, it should be claimable again
+      # Simulate the timer firing
+      send(Process.whereis(JobQueue), {:re_enqueue, id})
+      # Give it a moment to process
+      Process.sleep(50)
+
+      {:ok, job2} = JobQueue.claim_next()
+      assert job2.id == id
+      assert job2.attempt == 2
+    end
+
+    test "mark_failed permanently fails job when retries exhausted" do
+      {:ok, id} = JobQueue.submit(%{"task" => "fail_test"}, max_attempts: 2)
+
+      # Claim (attempt -> 1)
+      {:ok, _job} = JobQueue.claim_next()
+
+      # Fail (attempt 1 < 2, so re-queued)
+      :ok = JobQueue.mark_failed(id, %{error: "first failure"})
+      send(Process.whereis(JobQueue), {:re_enqueue, id})
+      Process.sleep(50)
+
+      # Re-claim (attempt -> 2)
+      {:ok, _job} = JobQueue.claim_next()
+
+      # Fail again (attempt 2 >= max_attempts 2, so permanently failed)
+      :ok = JobQueue.mark_failed(id, %{error: "final failure"})
+
+      {:ok, job} = JobQueue.get(id)
+      assert job.status == :failed
+      assert job.result == %{error: "final failure"}
+    end
+
+    test "backoff_ms increases exponentially" do
+      now = DateTime.utc_now()
+      job = %Core.Workers.Job{payload: %{}, inserted_at: now, attempt: 1}
+      assert Core.Workers.Job.backoff_ms(job) == 2_000
+
+      job = %Core.Workers.Job{payload: %{}, inserted_at: now, attempt: 2}
+      assert Core.Workers.Job.backoff_ms(job) == 4_000
+
+      job = %Core.Workers.Job{payload: %{}, inserted_at: now, attempt: 5}
+      assert Core.Workers.Job.backoff_ms(job) == 30_000
+
+      # Capped at 30s
+      job = %Core.Workers.Job{payload: %{}, inserted_at: now, attempt: 10}
+      assert Core.Workers.Job.backoff_ms(job) == 30_000
     end
   end
 

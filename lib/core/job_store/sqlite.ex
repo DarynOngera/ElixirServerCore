@@ -13,6 +13,14 @@ if Code.ensure_loaded?(Exqlite.Basic) do
         config :my_app, :job_store_opts, database: "priv/jobs.db"
 
     Requires `{:exqlite, "~> 0.29"}` in your `mix.exs` deps.
+
+    ## Connection model
+
+    Each operation opens and closes its own connection.  This is simple but
+    limits throughput (roughly ~1,000 ops/sec on a typical SSD).  Because
+    `Core.Workers.JobQueue` is a single GenServer, calls are serialized, so
+    the risk of a `last_insert_rowid()` race between concurrent inserts is
+    low.  For higher throughput implement a connection-pool adapter.
     """
     @behaviour Core.JobStore
     alias Exqlite.Basic
