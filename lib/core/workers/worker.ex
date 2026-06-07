@@ -3,9 +3,22 @@ defmodule Core.Workers.Worker do
   Background job worker. Polls the JobQueue every `@poll_interval` ms,
   claims the next available job, executes it, and updates its status.
 
-  Designed to run in a pool via Core.Workers.WorkerPool. Each worker
+  Designed to run in a pool via `Core.Workers.WorkerPool`. Each worker
   process operates independently — there is no cross-worker coordination
-  needed because JobQueue serializes claim_next/0 via GenServer.call.
+  needed because `JobQueue` serializes `claim_next/1` via `GenServer.call`.
+
+  ## Custom workers
+
+  To create a domain-specific worker, copy this module and override
+  `perform_work/1`. You must keep the same `start_link/1` signature so
+  `WorkerPool` can start it. The worker should read `:id` and `:pool` from
+  `opts` and register under a unique name derived from the pool.
+
+  ## Options (passed by WorkerPool)
+
+    * `:id` – unique integer ID within the pool
+    * `:queue` – the `JobQueue` name to poll (default: `Core.Workers.JobQueue`)
+    * `:pool` – the `WorkerPool` name this worker belongs to
 
   ## Telemetry events emitted
 
@@ -32,8 +45,9 @@ defmodule Core.Workers.Worker do
 
   def start_link(opts \\ []) do
     worker_id = Keyword.get(opts, :id, 1)
-    name = :"#{__MODULE__}_#{worker_id}"
-    GenServer.start_link(__MODULE__, %{id: worker_id}, name: name)
+    pool_name = Keyword.get(opts, :pool, Core.Workers.WorkerPool)
+    name = :"#{pool_name}_Worker_#{worker_id}"
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   ## ============================================================
@@ -41,10 +55,14 @@ defmodule Core.Workers.Worker do
   ## ============================================================
 
   @impl true
-  def init(%{id: id} = state) do
-    Logger.info("Worker ##{id} started")
+  def init(opts) do
+    worker_id = Keyword.get(opts, :id, 1)
+    queue = Keyword.get(opts, :queue, Core.Workers.JobQueue)
+    pool = Keyword.get(opts, :pool, Core.Workers.WorkerPool)
+
+    Logger.info("Worker ##{worker_id} started (queue: #{inspect(queue)}, pool: #{inspect(pool)})")
     schedule_work()
-    {:ok, state}
+    {:ok, %{id: worker_id, queue: queue, pool: pool}}
   end
 
   @impl true
@@ -70,14 +88,14 @@ defmodule Core.Workers.Worker do
     Process.send_after(self(), :work, @poll_interval)
   end
 
-  defp do_work(state) do
-    case JobQueue.claim_next() do
+  defp do_work(%{queue: queue} = state) do
+    case JobQueue.claim_next(queue) do
       {:ok, job} -> execute(job, state)
       :empty -> :noop
     end
   end
 
-  defp execute(job, %{id: worker_id}) do
+  defp execute(job, %{id: worker_id, queue: queue}) do
     Logger.info("Worker ##{worker_id} executing job #{job.id} (attempt #{job.attempt})")
 
     :telemetry.execute(
@@ -100,7 +118,7 @@ defmodule Core.Workers.Worker do
 
       # Protect against JobQueue being down during supervisor shutdown
       try do
-        JobQueue.mark_done(job.id, result)
+        JobQueue.mark_done(queue, job.id, result)
       catch
         :exit, {:noproc, _} ->
           Logger.warning("Worker ##{worker_id} could not mark_done: JobQueue is down")
@@ -127,7 +145,7 @@ defmodule Core.Workers.Worker do
 
         # Protect against JobQueue being down during supervisor shutdown
         try do
-          JobQueue.mark_failed(job.id, error_details)
+          JobQueue.mark_failed(queue, job.id, error_details)
         catch
           :exit, {:noproc, _} ->
             Logger.warning("Worker ##{worker_id} could not mark_failed: JobQueue is down")
@@ -135,7 +153,7 @@ defmodule Core.Workers.Worker do
     end
   end
 
-  defp perform_work(job) do
+  def perform_work(job) do
     # Placeholder for actual job execution logic
     # In a real application, this would dispatch to different handlers
     # based on job type

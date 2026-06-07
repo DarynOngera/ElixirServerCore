@@ -210,30 +210,30 @@ defmodule MyMusicServer.JobStore.Postgres do
     {table, index} = SQL.schema()
     Postgrex.query!(conn(), table, [])
     Postgrex.query!(conn(), index, [])
-    :ok
+    {:ok, conn()}
   end
 
-  def insert_job(job) do
+  def insert_job(conn, job) do
     {sql, params} = SQL.insert_params(job)
-    %{rows: [[id]]} = Postgrex.query!(conn(), sql <> " RETURNING id", params)
+    %{rows: [[id]]} = Postgrex.query!(conn, sql <> " RETURNING id", params)
     {:ok, %Job{job | id: id}}
   end
 
-  def update_job(id, changes) do
+  def update_job(conn, id, changes) do
     {sql, params} = SQL.update_params(id, changes)
-    Postgrex.query!(conn(), sql, params)
+    Postgrex.query!(conn, sql, params)
     :ok
   end
 
-  def get_job(id) do
-    %{rows: rows} = Postgrex.query!(conn(), SQL.select_by_id(), [id])
+  def get_job(conn, id) do
+    %{rows: rows} = Postgrex.query!(conn, SQL.select_by_id(), [id])
     case rows do
       [row | _] -> {:ok, SQL.from_row(row)}
       []        -> {:error, :not_found}
     end
   end
 
-  def list_jobs(opts) do
+  def list_jobs(conn, opts) do
     {sql, params} =
       if status = Keyword.get(opts, :status) do
         {SQL.select_by_status(), [Atom.to_string(status)]}
@@ -241,13 +241,13 @@ defmodule MyMusicServer.JobStore.Postgres do
         {SQL.select_all(), []}
       end
 
-    %{rows: rows} = Postgrex.query!(conn(), sql, params)
+    %{rows: rows} = Postgrex.query!(conn, sql, params)
     Enum.map(rows, &SQL.from_row/1)
   end
 
-  def cleanup(opts) do
+  def cleanup(conn, opts) do
     {sql, params} = SQL.cleanup_params(Keyword.get(opts, :max_age_days, 7))
-    Postgrex.query!(conn(), sql, params)
+    Postgrex.query!(conn, sql, params)
     :ok
   end
 
@@ -288,8 +288,9 @@ defmodule MyMusicServer.MusicWorker do
 
   def start_link(opts) do
     worker_id = Keyword.get(opts, :id, 1)
-    name = :"#{__MODULE__}_#{worker_id}"
-    GenServer.start_link(__MODULE__, %{id: worker_id}, name: name)
+    pool_name = Keyword.get(opts, :pool, Core.Workers.WorkerPool)
+    name = :"#{pool_name}_Worker_#{worker_id}"
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   ## ============================================================
@@ -297,16 +298,18 @@ defmodule MyMusicServer.MusicWorker do
   ## ============================================================
 
   @impl true
-  def init(%{id: id} = state) do
-    Logger.info("Music Worker ##{id} started")
+  def init(opts) do
+    worker_id = Keyword.get(opts, :id, 1)
+    queue = Keyword.get(opts, :queue, Core.Workers.JobQueue)
+    Logger.info("Music Worker ##{worker_id} started")
     schedule_work()
-    {:ok, state}
+    {:ok, %{id: worker_id, queue: queue}}
   end
 
   @impl true
   def handle_info(:work, state) do
-    case JobQueue.claim_next() do
-      {:ok, job} -> execute(job)
+    case JobQueue.claim_next(state.queue) do
+      {:ok, job} -> execute(job, state)
       :empty -> :noop
     end
 
@@ -322,28 +325,28 @@ defmodule MyMusicServer.MusicWorker do
     Process.send_after(self(), :work, @poll_interval)
   end
 
-  defp execute(job) do
+  defp execute(job, %{queue: queue}) do
     Logger.info("Processing music job #{job.id}")
-    
+
     try do
       result = case job.payload do
         %{"task" => "transcode_audio", "file" => file, "format" => format} ->
           transcode_audio(file, format)
-        
+
         %{"task" => "generate_waveform", "song_id" => id} ->
           generate_waveform(id)
-        
+
         %{"task" => "extract_metadata", "file" => file} ->
           extract_metadata(file)
-        
+
         %{"task" => "sync_library"} ->
           sync_library()
-        
+
         _ ->
           %{error: "Unknown task type"}
       end
-      
-      JobQueue.mark_done(job.id, result)
+
+      JobQueue.mark_done(queue, job.id, result)
       Logger.info("Music job #{job.id} completed successfully")
     rescue
       error ->
@@ -351,9 +354,9 @@ defmodule MyMusicServer.MusicWorker do
           error: Exception.message(error),
           stacktrace: Exception.format_stacktrace(__STACKTRACE__)
         }
-        
+
         Logger.error("Music job #{job.id} failed: #{inspect(error)}")
-        JobQueue.mark_failed(job.id, error_details)
+        JobQueue.mark_failed(queue, job.id, error_details)
     end
   end
 
@@ -431,9 +434,15 @@ defmodule MyMusicServer.Application do
 
     children = [
       {Core.Workers.JobQueue,
+        name: MyMusicServer.Queue,
+        pool: MyMusicServer.Pool,
         store: Core.JobStore.SQLite,
         store_opts: [database: "priv/jobs.db"]},
-      {Core.Workers.WorkerPool, worker: MyMusicServer.MusicWorker, size: 4},
+      {Core.Workers.WorkerPool,
+        name: MyMusicServer.Pool,
+        worker: MyMusicServer.MusicWorker,
+        size: 4,
+        queue: MyMusicServer.Queue},
       {Bandit,
         plug: MyMusicServer.Router,
         scheme: :http,
@@ -758,8 +767,8 @@ You don't have to use everything. Pick what you need:
 ```elixir
 # Minimal setup - just job queue
 children = [
-  Core.Workers.JobQueue,
-  MyApp.CustomWorker
+  {Core.Workers.JobQueue, name: MyApp.Queue, pool: MyApp.Pool},
+  {Core.Workers.WorkerPool, name: MyApp.Pool, worker: MyApp.CustomWorker, queue: MyApp.Queue}
 ]
 
 # No HTTP server needed if you're building a background processor

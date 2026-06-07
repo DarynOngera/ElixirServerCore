@@ -17,30 +17,30 @@ defmodule Core.JobStore.SQL do
           {table, index} = SQL.schema()
           Postgrex.query!(conn(), table, [])
           Postgrex.query!(conn(), index, [])
-          :ok
+          {:ok, conn()}
         end
 
-        def insert_job(job) do
+        def insert_job(conn, job) do
           {sql, params} = SQL.insert_params(job)
-          %{rows: [[id]]} = Postgrex.query!(conn(), sql <> " RETURNING id", params)
+          %{rows: [[id]]} = Postgrex.query!(conn, sql <> " RETURNING id", params)
           {:ok, %Core.Workers.Job{job | id: id}}
         end
 
-        def update_job(id, changes) do
+        def update_job(conn, id, changes) do
           {sql, params} = SQL.update_params(id, changes)
-          Postgrex.query!(conn(), sql, params)
+          Postgrex.query!(conn, sql, params)
           :ok
         end
 
-        def get_job(id) do
-          %{rows: rows} = Postgrex.query!(conn(), SQL.select_by_id(), [id])
+        def get_job(conn, id) do
+          %{rows: rows} = Postgrex.query!(conn, SQL.select_by_id(), [id])
           case rows do
             [row | _] -> {:ok, SQL.from_row(row)}
             []        -> {:error, :not_found}
           end
         end
 
-        def list_jobs(opts) do
+        def list_jobs(conn, opts) do
           {sql, params} =
             if status = Keyword.get(opts, :status) do
               {SQL.select_by_status(), [Atom.to_string(status)]}
@@ -48,13 +48,13 @@ defmodule Core.JobStore.SQL do
               {SQL.select_all(), []}
             end
 
-          %{rows: rows} = Postgrex.query!(conn(), sql, params)
+          %{rows: rows} = Postgrex.query!(conn, sql, params)
           Enum.map(rows, &SQL.from_row/1)
         end
 
-        def cleanup(opts) do
+        def cleanup(conn, opts) do
           {sql, params} = SQL.cleanup_params(Keyword.get(opts, :max_age_days, 7))
-          Postgrex.query!(conn(), sql, params)
+          Postgrex.query!(conn, sql, params)
           :ok
         end
 
