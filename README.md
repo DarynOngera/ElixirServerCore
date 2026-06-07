@@ -94,6 +94,47 @@ config :servcore,
 
 The framework auto-starts `JobQueue`, `WorkerPool`, and `Bandit` with your router.
 
+### Multiple Worker Pipelines
+
+You can define independent job queues and worker pools for different job types:
+
+```elixir
+# config/config.exs
+config :servcore,
+  router: MyApp.Router,
+  port: 4000,
+  start_http: true,
+  pipelines: [
+    [
+      queue_name: MyApp.EmailQueue,
+      pool_name: MyApp.EmailPool,
+      worker: MyApp.EmailWorker,
+      pool_size: 4,
+      job_store: Core.JobStore.SQLite,
+      job_store_opts: [database: "priv/email.db"]
+    ],
+    [
+      queue_name: MyApp.MediaQueue,
+      pool_name: MyApp.MediaPool,
+      worker: MyApp.MediaWorker,
+      pool_size: 2,
+      job_store: Core.JobStore.SQLite,
+      job_store_opts: [database: "priv/media.db"]
+    ]
+  ]
+```
+
+Then mount their routes separately in your router:
+
+```elixir
+import Core.HTTP.BaseRouter
+
+add_job_routes(queue: MyApp.EmailQueue, path_prefix: "/email_jobs")
+add_job_routes(queue: MyApp.MediaQueue, path_prefix: "/media_jobs")
+add_health_route([MyApp.EmailQueue, MyApp.MediaQueue])
+add_stats_route([MyApp.EmailQueue, MyApp.MediaQueue])
+```
+
 ### Manual Supervision (library, full control)
 
 ```elixir
@@ -102,8 +143,8 @@ config :servcore, start_http: false
 
 # application.ex
 children = [
-  {Core.Workers.JobQueue, store: Core.JobStore.SQLite, store_opts: [database: "jobs.db"]},
-  {Core.Workers.WorkerPool, worker: MyApp.Worker, size: 4},
+  {Core.Workers.JobQueue, name: MyApp.Queue, store: Core.JobStore.SQLite, store_opts: [database: "jobs.db"]},
+  {Core.Workers.WorkerPool, name: MyApp.Pool, worker: MyApp.Worker, size: 4, queue: MyApp.Queue},
   {Bandit, plug: MyApp.Router, scheme: :http, port: 4000, http_2_options: [enabled: true]}
 ]
 ```
@@ -700,10 +741,14 @@ defmodule MyMusicServer.Application do
 
   def start(_type, _args) do
     children = [
-      # Core capabilities
-      Core.Workers.JobQueue,
-      Core.Workers.Worker,
-      
+      # Core capabilities — named queue + pool for music jobs
+      {Core.Workers.JobQueue, name: MyMusicServer.Queue, pool: MyMusicServer.Pool},
+      {Core.Workers.WorkerPool,
+        name: MyMusicServer.Pool,
+        worker: MyMusicServer.Worker,
+        size: 4,
+        queue: MyMusicServer.Queue},
+
       # Custom HTTP router with music-specific endpoints
       {Bandit,
         plug: MyMusicServer.Router,
@@ -711,7 +756,7 @@ defmodule MyMusicServer.Application do
         port: 5000,
         http_2_options: [enabled: true]
       },
-      
+
       # Add your domain-specific services
       MyMusicServer.Library,
       MyMusicServer.Player,
@@ -726,26 +771,65 @@ end
 
 ### Extending Worker Behavior
 
-Override the `perform_work/1` function to add custom job handling:
+Create a custom worker module that overrides `perform_work/1`. It can run in a `WorkerPool` just like the default worker:
 
 ```elixir
 defmodule MyMusicServer.Worker do
   use GenServer
+  require Logger
   alias Core.Workers.JobQueue
 
-  # ... (same setup as Core.Workers.Worker)
+  @poll_interval 1_000
+
+  def start_link(opts) do
+    worker_id = Keyword.get(opts, :id, 1)
+    pool_name = Keyword.get(opts, :pool, Core.Workers.WorkerPool)
+    name = :"#{pool_name}_Worker_#{worker_id}"
+    GenServer.start_link(__MODULE__, opts, name: name)
+  end
+
+  def init(opts) do
+    worker_id = Keyword.get(opts, :id, 1)
+    queue = Keyword.get(opts, :queue, Core.Workers.JobQueue)
+    Logger.info("Worker ##{worker_id} started")
+    Process.send_after(self(), :work, @poll_interval)
+    {:ok, %{id: worker_id, queue: queue}}
+  end
+
+  def handle_info(:work, state) do
+    case JobQueue.claim_next(state.queue) do
+      {:ok, job} -> execute(job, state)
+      :empty -> :noop
+    end
+    Process.send_after(self(), :work, @poll_interval)
+    {:noreply, state}
+  end
+
+  defp execute(job, %{id: worker_id, queue: queue}) do
+    Logger.info("Worker ##{worker_id} executing job #{job.id}")
+
+    try do
+      result = perform_work(job)
+      JobQueue.mark_done(queue, job.id, result)
+      Logger.info("Worker ##{worker_id} completed job #{job.id}")
+    rescue
+      error ->
+        Logger.error("Worker ##{worker_id} failed job #{job.id}: #{Exception.message(error)}")
+        JobQueue.mark_failed(queue, job.id, %{error: Exception.message(error)})
+    end
+  end
 
   defp perform_work(job) do
     case job.payload do
       %{"task" => "transcode_audio", "file" => file} ->
         transcode_audio(file)
-      
+
       %{"task" => "generate_waveform", "track_id" => id} ->
         generate_waveform(id)
-      
+
       %{"task" => "sync_library"} ->
         sync_library()
-      
+
       _ ->
         %{error: "Unknown task type"}
     end
@@ -755,8 +839,6 @@ defmodule MyMusicServer.Worker do
     # Custom audio processing logic
     %{status: "transcoded", output: "#{file}.mp3"}
   end
-  
-  # ... more custom handlers
 end
 ```
 
@@ -811,10 +893,11 @@ This dual structure allows:
 
 For production deployments, consider:
 
-1. **Persistent Storage**: Add PostgreSQL or Redis for job persistence
-2. **Job Cleanup**: Archive completed jobs after N days
-3. **Priority Queue**: Implement job prioritization
-4. **Distributed Queue**: Use RabbitMQ or Kafka for distributed systems
+1. **Multiple Pipelines**: Define separate queues and worker pools for different job types (e.g. CPU-intensive vs I/O-intensive) so they don't block each other.
+2. **Persistent Storage**: Add PostgreSQL or Redis for job persistence
+3. **Job Cleanup**: Archive completed jobs after N days
+4. **Priority Queue**: Implement job prioritization
+5. **Distributed Queue**: Use RabbitMQ or Kafka for distributed systems
 
 ---
 
@@ -897,6 +980,7 @@ Then access metrics at `http://localhost:9568/metrics`
 | `:job_store_opts` | keyword | `[]` | Options passed to the store |
 | `:start_http` | boolean | `true` | Start `Bandit` automatically |
 | `:start_workers` | boolean | `true` | Start `WorkerPool` automatically |
+| `:pipelines` | list | `nil` | List of independent queue+pool configs (see Multiple Worker Pipelines) |
 
 Set `start_http: false` when integrating into an existing Phoenix application or when you want full control over the HTTP server.
 
@@ -1003,6 +1087,7 @@ Completed:
 - [x] Job retries with exponential backoff
 - [x] SQLite persistence backend
 - [x] Pluggable `Core.JobStore` behaviour for custom databases
+- [x] Multiple independent job queues and worker pools
 
 Planned:
 - [ ] PostgreSQL persistence backend (via `Core.JobStore.SQL` + Postgrex)

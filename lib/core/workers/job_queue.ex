@@ -1,5 +1,32 @@
 # lib/core/workers/job_queue.ex
 defmodule Core.Workers.JobQueue do
+  @moduledoc """
+  FIFO job queue backed by a pluggable `Core.JobStore`.
+
+  Each `JobQueue` is a GenServer that maintains an in-memory queue of job IDs
+  and a map of job structs. Jobs are persisted via the store so they survive
+  VM restarts (when using a durable backend such as `Core.JobStore.SQLite`).
+
+  ## Named queues
+
+  You can start multiple isolated queues by giving each a unique `:name`:
+
+      {Core.Workers.JobQueue, name: MyApp.EmailQueue, pool: MyApp.EmailPool}
+      {Core.Workers.JobQueue, name: MyApp.MediaQueue, pool: MyApp.MediaPool}
+
+  All public functions accept a server reference (atom or pid) as the first
+  argument. The zero-arity versions operate on the default queue
+  `Core.Workers.JobQueue`.
+
+  ## Options
+
+    * `:name` – registered name for this queue (default: `Core.Workers.JobQueue`)
+    * `:pool` – the `WorkerPool` name to notify when new jobs arrive
+    * `:store` – `Core.JobStore` module (default: `Core.JobStore.Memory`)
+    * `:store_opts` – options passed to the store's `init/1`
+    * `:cleanup_interval_ms` – how often to purge old jobs (default: 1 hour)
+    * `:max_age_days` – retention for completed / failed jobs (default: 7)
+  """
   use GenServer
   require Logger
   alias Core.Workers.Job
@@ -13,14 +40,23 @@ defmodule Core.Workers.JobQueue do
   ## ============================================================
 
   def start_link(opts \\ []) do
-    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    GenServer.start_link(__MODULE__, opts, name: name)
   end
 
   @doc """
   Submit a new job to the queue.
   Returns synchronously with the assigned job id.
   """
-  def submit(payload, opts \\ []) do
+  def submit(payload) do
+    submit(__MODULE__, payload, [])
+  end
+
+  def submit(payload, opts) do
+    submit(__MODULE__, payload, opts)
+  end
+
+  def submit(server, payload, opts) do
     max_attempts = Keyword.get(opts, :max_attempts, 3)
 
     job = %Job{
@@ -30,14 +66,26 @@ defmodule Core.Workers.JobQueue do
       max_attempts: max_attempts
     }
 
-    GenServer.call(__MODULE__, {:submit, job})
+    GenServer.call(server, {:submit, job})
   end
 
   @doc """
   Submit a job to run at a specific future time.
   The job is persisted immediately but enters the in-memory queue only at `run_at`.
   """
-  def submit_at(payload, %DateTime{} = run_at, opts \\ []) do
+  def submit_at(payload, %DateTime{} = run_at) do
+    submit_at(__MODULE__, payload, run_at, [])
+  end
+
+  def submit_at(payload, %DateTime{} = run_at, opts) do
+    submit_at(__MODULE__, payload, run_at, opts)
+  end
+
+  def submit_at(server, payload, %DateTime{} = run_at) do
+    submit_at(server, payload, run_at, [])
+  end
+
+  def submit_at(server, payload, %DateTime{} = run_at, opts) do
     delay_ms = max(DateTime.diff(run_at, DateTime.utc_now(), :millisecond), 0)
     max_attempts = Keyword.get(opts, :max_attempts, 3)
 
@@ -49,7 +97,7 @@ defmodule Core.Workers.JobQueue do
       run_at: run_at
     }
 
-    GenServer.call(__MODULE__, {:submit_scheduled, job, delay_ms})
+    GenServer.call(server, {:submit_scheduled, job, delay_ms})
   end
 
   @doc """
@@ -57,46 +105,78 @@ defmodule Core.Workers.JobQueue do
   Marks it as :running and returns it to the worker.
   """
   def claim_next do
-    GenServer.call(__MODULE__, :claim_next)
+    claim_next(__MODULE__)
+  end
+
+  def claim_next(server) do
+    GenServer.call(server, :claim_next)
   end
 
   @doc """
   Mark a job as completed with a result
   """
   def mark_done(id, result) do
-    GenServer.call(__MODULE__, {:finish_job, id, :done, result})
+    mark_done(__MODULE__, id, result)
+  end
+
+  def mark_done(server, id, result) do
+    GenServer.call(server, {:finish_job, id, :done, result})
   end
 
   @doc """
   Mark a job as failed with an error reason
   """
   def mark_failed(id, reason) do
-    GenServer.call(__MODULE__, {:fail_job, id, reason})
+    mark_failed(__MODULE__, id, reason)
+  end
+
+  def mark_failed(server, id, reason) do
+    GenServer.call(server, {:fail_job, id, reason})
   end
 
   @doc """
   Get all jobs in the queue
   """
-  def all(opts \\ []) do
-    GenServer.call(__MODULE__, {:all, opts})
+  def all do
+    all(__MODULE__, [])
+  end
+
+  def all(opts) do
+    all(__MODULE__, opts)
+  end
+
+  def all(server, opts) do
+    GenServer.call(server, {:all, opts})
   end
 
   @doc """
   Get a specific job by ID
   """
   def get(id) do
-    GenServer.call(__MODULE__, {:get, id})
+    get(__MODULE__, id)
+  end
+
+  def get(server, id) do
+    GenServer.call(server, {:get, id})
   end
 
   def stats do
-    GenServer.call(__MODULE__, :stats)
+    stats(__MODULE__)
+  end
+
+  def stats(server) do
+    GenServer.call(server, :stats)
   end
 
   @doc """
   Reset the queue — clears all in-memory state. Intended for test use only.
   """
   def reset do
-    GenServer.call(__MODULE__, :reset)
+    reset(__MODULE__)
+  end
+
+  def reset(server) do
+    GenServer.call(server, :reset)
   end
 
   ## ============================================================
@@ -109,77 +189,96 @@ defmodule Core.Workers.JobQueue do
     store_opts = Keyword.get(opts, :store_opts, [])
     cleanup_interval = Keyword.get(opts, :cleanup_interval_ms, @default_cleanup_interval_ms)
     max_age_days = Keyword.get(opts, :max_age_days, @default_max_age_days)
+    pool_name = Keyword.get(opts, :pool, Core.Workers.WorkerPool)
 
-    :ok = store.init(store_opts)
+    case store.init(store_opts) do
+      {:ok, store_state} ->
+        now = DateTime.utc_now()
 
-    now = DateTime.utc_now()
+        # Load queued jobs. Split into "ready now" vs "scheduled for future".
+        all_queued = store.list_jobs(store_state, status: :queued)
 
-    # Load queued jobs. Split into "ready now" vs "scheduled for future".
-    all_queued = store.list_jobs(status: :queued)
+        {ready_jobs, future_jobs} =
+          Enum.split_with(all_queued, fn job ->
+            is_nil(job.run_at) or DateTime.compare(job.run_at, now) != :gt
+          end)
 
-    {ready_jobs, future_jobs} =
-      Enum.split_with(all_queued, fn job ->
-        is_nil(job.run_at) or DateTime.compare(job.run_at, now) != :gt
-      end)
+        # Recover running jobs as queued (they never finished)
+        running_jobs = store.list_jobs(store_state, status: :running)
 
-    # Recover running jobs as queued (they never finished)
-    running_jobs = store.list_jobs(status: :running)
+        recovered_jobs =
+          Enum.map(running_jobs, fn %Job{} = job ->
+            recovered = %Job{job | status: :queued, attempt: job.attempt + 1}
 
-    recovered_jobs =
-      Enum.map(running_jobs, fn %Job{} = job ->
-        recovered = %Job{job | status: :queued, attempt: job.attempt + 1}
-        :ok = store.update_job(job.id, status: :queued, attempt: recovered.attempt)
-        recovered
-      end)
+            :ok =
+              store.update_job(store_state, job.id, status: :queued, attempt: recovered.attempt)
 
-    all_ready = ready_jobs ++ recovered_jobs
+            recovered
+          end)
 
-    jobs_map =
-      all_ready
-      |> Enum.map(fn job -> {job.id, job} end)
-      |> Map.new()
+        all_ready = ready_jobs ++ recovered_jobs
 
-    queue =
-      all_ready
-      |> Enum.sort_by(& &1.inserted_at)
-      |> Enum.reduce(:queue.new(), fn job, q -> :queue.in(job.id, q) end)
+        jobs_map =
+          all_ready
+          |> Enum.map(fn job -> {job.id, job} end)
+          |> Map.new()
 
-    # Re-schedule future jobs
-    Enum.each(future_jobs, fn job ->
-      delay_ms = max(DateTime.diff(job.run_at, now, :millisecond), 0)
-      Process.send_after(self(), {:enqueue_delayed, job.id}, delay_ms)
-    end)
+        queue =
+          all_ready
+          |> Enum.sort_by(& &1.inserted_at)
+          |> Enum.reduce(:queue.new(), fn job, q -> :queue.in(job.id, q) end)
 
-    # Schedule periodic cleanup
-    schedule_cleanup(cleanup_interval)
+        # Re-schedule future jobs
+        Enum.each(future_jobs, fn job ->
+          delay_ms = max(DateTime.diff(job.run_at, now, :millisecond), 0)
+          Process.send_after(self(), {:enqueue_delayed, job.id}, delay_ms)
+        end)
 
-    {:ok,
-     %{
-       queue: queue,
-       jobs: jobs_map,
-       store: store,
-       store_opts: store_opts,
-       cleanup_interval_ms: cleanup_interval,
-       max_age_days: max_age_days
-     }}
+        # Schedule periodic cleanup
+        schedule_cleanup(cleanup_interval)
+
+        {:ok,
+         %{
+           queue: queue,
+           jobs: jobs_map,
+           store: store,
+           store_state: store_state,
+           store_opts: store_opts,
+           cleanup_interval_ms: cleanup_interval,
+           max_age_days: max_age_days,
+           pool_name: pool_name
+         }}
+
+      {:error, reason} ->
+        {:stop, reason}
+    end
   end
 
   @impl true
-  def handle_call({:submit, job}, _from, %{queue: queue, jobs: jobs, store: store} = state) do
-    {:ok, job} = store.insert_job(job)
+  def handle_call(
+        {:submit, job},
+        _from,
+        %{queue: queue, jobs: jobs, store: store, store_state: store_state, pool_name: pool_name} =
+          state
+      ) do
+    {:ok, job} = store.insert_job(store_state, job)
 
     updated_queue = :queue.in(job.id, queue)
     updated_jobs = Map.put(jobs, job.id, job)
 
     # Wake all idle workers immediately
-    notify_workers()
+    notify_workers(pool_name)
 
     {:reply, {:ok, job.id}, %{state | queue: updated_queue, jobs: updated_jobs}}
   end
 
   @impl true
-  def handle_call({:submit_scheduled, job, delay_ms}, _from, %{jobs: jobs, store: store} = state) do
-    {:ok, job} = store.insert_job(job)
+  def handle_call(
+        {:submit_scheduled, job, delay_ms},
+        _from,
+        %{jobs: jobs, store: store, store_state: store_state} = state
+      ) do
+    {:ok, job} = store.insert_job(store_state, job)
 
     # Persisted but not yet in the in-memory queue
     updated_jobs = Map.put(jobs, job.id, job)
@@ -189,7 +288,11 @@ defmodule Core.Workers.JobQueue do
   end
 
   @impl true
-  def handle_call(:claim_next, _from, %{queue: queue, jobs: jobs, store: store} = state) do
+  def handle_call(
+        :claim_next,
+        _from,
+        %{queue: queue, jobs: jobs, store: store, store_state: store_state} = state
+      ) do
     case dequeue_next_queued(queue, jobs) do
       {:ok, job_id, remaining_queue} ->
         %Job{} = job = Map.fetch!(jobs, job_id)
@@ -204,7 +307,7 @@ defmodule Core.Workers.JobQueue do
         updated_jobs = Map.put(jobs, job_id, updated_job)
 
         :ok =
-          store.update_job(job_id,
+          store.update_job(store_state, job_id,
             status: :running,
             started_at: updated_job.started_at,
             attempt: updated_job.attempt
@@ -219,7 +322,11 @@ defmodule Core.Workers.JobQueue do
   end
 
   @impl true
-  def handle_call({:finish_job, id, status, result}, _from, %{jobs: jobs, store: store} = state) do
+  def handle_call(
+        {:finish_job, id, status, result},
+        _from,
+        %{jobs: jobs, store: store, store_state: store_state} = state
+      ) do
     case Map.get(jobs, id) do
       nil ->
         {:reply, {:error, :not_found}, state}
@@ -229,7 +336,7 @@ defmodule Core.Workers.JobQueue do
         updated_jobs = Map.put(jobs, id, updated_job)
 
         :ok =
-          store.update_job(id,
+          store.update_job(store_state, id,
             status: status,
             result: result,
             finished_at: updated_job.finished_at
@@ -240,7 +347,11 @@ defmodule Core.Workers.JobQueue do
   end
 
   @impl true
-  def handle_call({:fail_job, id, reason}, _from, %{jobs: jobs, store: store} = state) do
+  def handle_call(
+        {:fail_job, id, reason},
+        _from,
+        %{jobs: jobs, store: store, store_state: store_state} = state
+      ) do
     case Map.get(jobs, id) do
       nil ->
         {:reply, {:error, :not_found}, state}
@@ -258,7 +369,7 @@ defmodule Core.Workers.JobQueue do
           updated_jobs = Map.put(jobs, id, updated_job)
 
           :ok =
-            store.update_job(id,
+            store.update_job(store_state, id,
               status: :failed,
               result: reason,
               finished_at: updated_job.finished_at
@@ -278,7 +389,7 @@ defmodule Core.Workers.JobQueue do
           Process.send_after(self(), {:re_enqueue, id}, backoff)
 
           :ok =
-            store.update_job(id,
+            store.update_job(store_state, id,
               status: :queued,
               result: reason,
               retry_at: retry_at
@@ -340,10 +451,20 @@ defmodule Core.Workers.JobQueue do
   end
 
   @impl true
-  def handle_call(:reset, _from, %{store: store, store_opts: store_opts} = state) do
-    store.cleanup(max_age_days: 0)
-    :ok = store.init(store_opts)
-    {:reply, :ok, %{state | queue: :queue.new(), jobs: %{}}}
+  def handle_call(
+        :reset,
+        _from,
+        %{store: store, store_state: store_state, store_opts: store_opts} = state
+      ) do
+    store.cleanup(store_state, max_age_days: 0)
+
+    case store.init(store_opts) do
+      {:ok, new_store_state} ->
+        {:reply, :ok, %{state | queue: :queue.new(), jobs: %{}, store_state: new_store_state}}
+
+      {:error, reason} ->
+        {:reply, {:error, reason}, state}
+    end
   end
 
   @impl true
@@ -353,12 +474,12 @@ defmodule Core.Workers.JobQueue do
   end
 
   @impl true
-  def handle_info({:re_enqueue, id}, %{queue: queue, jobs: jobs} = state) do
+  def handle_info({:re_enqueue, id}, %{queue: queue, jobs: jobs, pool_name: pool_name} = state) do
     case Map.get(jobs, id) do
       %Job{status: :queued} = _job ->
         updated_queue = :queue.in(id, queue)
         # Wake workers so the retry is picked up immediately
-        notify_workers()
+        notify_workers(pool_name)
         {:noreply, %{state | queue: updated_queue}}
 
       _ ->
@@ -372,18 +493,18 @@ defmodule Core.Workers.JobQueue do
         :cleanup,
         %{
           store: store,
-          store_opts: _store_opts,
+          store_state: store_state,
           max_age_days: max_age_days,
           cleanup_interval_ms: interval
         } = state
       ) do
-    :ok = store.cleanup(max_age_days: max_age_days)
+    :ok = store.cleanup(store_state, max_age_days: max_age_days)
     schedule_cleanup(interval)
     {:noreply, state}
   end
 
   @impl true
-  def terminate(reason, %{jobs: jobs, store: store}) do
+  def terminate(reason, %{jobs: jobs, store: store, store_state: store_state}) do
     Logger.warning("JobQueue terminating (#{inspect(reason)}), marking running jobs as failed")
 
     Enum.each(jobs, fn
@@ -391,7 +512,7 @@ defmodule Core.Workers.JobQueue do
         Logger.error("Job #{job.id} was :running at shutdown — marking :failed")
 
         :ok =
-          store.update_job(job.id,
+          store.update_job(store_state, job.id,
             status: :failed,
             finished_at: DateTime.utc_now()
           )
@@ -432,9 +553,9 @@ defmodule Core.Workers.JobQueue do
     end
   end
 
-  defp notify_workers do
-    # Notify all worker processes under WorkerPool supervisor
-    if pid = Process.whereis(Core.Workers.WorkerPool) do
+  defp notify_workers(pool_name) do
+    # Notify all worker processes under the given WorkerPool supervisor
+    if pid = Process.whereis(pool_name) do
       for {_, child_pid, :worker, _} <- Supervisor.which_children(pid), is_pid(child_pid) do
         send(child_pid, :work_available)
       end

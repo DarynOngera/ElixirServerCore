@@ -9,13 +9,14 @@ defmodule Core.Workers.WorkerPool do
 
   Or pass at startup:
 
-      {Core.Workers.WorkerPool, size: 4}
+      {Core.Workers.WorkerPool, name: MyApp.Pool, worker: MyApp.Worker, size: 4, queue: MyApp.Queue}
   """
   use Supervisor
   require Logger
 
   def start_link(opts \\ []) do
-    Supervisor.start_link(__MODULE__, opts, name: __MODULE__)
+    name = Keyword.get(opts, :name, __MODULE__)
+    Supervisor.start_link(__MODULE__, opts, name: name)
   end
 
   @impl true
@@ -26,6 +27,8 @@ defmodule Core.Workers.WorkerPool do
         System.schedulers_online()
 
     worker_module = Keyword.get(opts, :worker, Core.Workers.Worker)
+    queue_name = Keyword.get(opts, :queue, Core.Workers.JobQueue)
+    pool_name = Keyword.get(opts, :name, __MODULE__)
 
     Code.ensure_loaded!(worker_module)
 
@@ -34,19 +37,14 @@ defmodule Core.Workers.WorkerPool do
             "#{inspect(worker_module)} must implement start_link/1 accepting [id: integer()]"
     end
 
-    # Verify the worker accepts :id in opts and will produce unique process names
-    # by checking it doesn't unconditionally register under the module name
-    if function_exported?(worker_module, :init, 1) do
-      # Heuristic: if init/1 is exported, assume it handles opts properly
-      :ok
-    end
-
-    Logger.info("WorkerPool starting #{size} workers (module: #{worker_module})")
+    Logger.info("WorkerPool #{inspect(pool_name)} starting #{size} workers (module: #{worker_module})")
 
     children =
       for i <- 1..size do
+        worker_opts = [id: i, queue: queue_name, pool: pool_name]
+
         Supervisor.child_spec(
-          {worker_module, [id: i]},
+          {worker_module, worker_opts},
           id: {worker_module, i}
         )
       end

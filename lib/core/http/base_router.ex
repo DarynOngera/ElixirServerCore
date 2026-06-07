@@ -17,8 +17,10 @@ defmodule Core.HTTP.BaseRouter do
         import Core.HTTP.BaseRouter
 
         add_root_route()
-        add_health_route()
-        add_job_routes()
+        add_health_route([MyApp.Queue1, MyApp.Queue2])
+        add_stats_route([MyApp.Queue1, MyApp.Queue2])
+        add_job_routes(queue: MyApp.Queue1, path_prefix: "/jobs")
+        add_job_routes(queue: MyApp.Queue2, path_prefix: "/media_jobs")
 
         get "/my-domain" do
           send_resp(conn, 200, "custom")
@@ -42,30 +44,61 @@ defmodule Core.HTTP.BaseRouter do
   end
 
   @doc """
-  Injects GET /health — returns JSON {status: "OK"} or {status: "DEGRADED"} (503).
+  Injects GET /health — returns JSON {status: "OK", queues: %{...}} or {status: "DEGRADED", queues: %{...}} (503).
+  Checks every queue in the provided list.
   """
-  defmacro add_health_route do
+  defmacro add_health_route(queues \\ [Core.Workers.JobQueue]) do
     quote do
       get "/health" do
-        alive = Process.whereis(Core.Workers.JobQueue) != nil
-        {status, code} = if alive, do: {"OK", 200}, else: {"DEGRADED", 503}
+        statuses =
+          for queue <- unquote(queues) do
+            alive = Process.whereis(queue) != nil
+            {queue, alive}
+          end
+
+        all_alive = Enum.all?(statuses, fn {_, alive} -> alive end)
+        {status, code} = if all_alive, do: {"OK", 200}, else: {"DEGRADED", 503}
+
+        body = %{
+          status: status,
+          queues: Map.new(statuses, fn {q, alive} -> {inspect(q), alive} end)
+        }
 
         var!(conn)
         |> put_resp_content_type("application/json")
-        |> send_resp(code, Jason.encode!(%{status: status}))
+        |> send_resp(code, Jason.encode!(body))
       end
     end
   end
 
   @doc """
-  Injects GET /stats — returns job counts by status.
+  Injects GET /stats — returns aggregate job counts across all provided queues.
   """
-  defmacro add_stats_route do
+  defmacro add_stats_route(queues \\ [Core.Workers.JobQueue]) do
     quote do
       get "/stats" do
+        stats =
+          Enum.reduce(unquote(queues), %{queued: 0, running: 0, done: 0, failed: 0, total: 0}, fn queue, acc ->
+            case Process.whereis(queue) do
+              nil ->
+                acc
+
+              _ ->
+                s = Core.Workers.JobQueue.stats(queue)
+
+                %{
+                  queued: acc.queued + s.queued,
+                  running: acc.running + s.running,
+                  done: acc.done + s.done,
+                  failed: acc.failed + s.failed,
+                  total: acc.total + s.total
+                }
+            end
+          end)
+
         var!(conn)
         |> put_resp_content_type("application/json")
-        |> send_resp(200, Jason.encode!(Core.Workers.JobQueue.stats()))
+        |> send_resp(200, Jason.encode!(stats))
       end
     end
   end
@@ -79,14 +112,21 @@ defmodule Core.HTTP.BaseRouter do
   @doc """
   Injects POST /jobs, POST /jobs/schedule, GET /jobs, GET /jobs/:id.
 
+  Accepts options:
+    - `:queue` — the JobQueue module/name to use (default: `Core.Workers.JobQueue`)
+    - `:path_prefix` — mount point for the routes (default: `"/jobs"`)
+
   GET /jobs supports query params:
     - status=queued|running|done|failed
     - page=N  (default 1)
     - per_page=N (default 50, max 200)
   """
-  defmacro add_job_routes do
+  defmacro add_job_routes(opts \\ []) do
+    queue = Keyword.get(opts, :queue, Core.Workers.JobQueue)
+    prefix = Keyword.get(opts, :path_prefix, "/jobs")
+
     quote do
-      post "/jobs" do
+      post unquote(prefix) do
         case var!(conn).body_params do
           %{"payload" => payload} when is_map(payload) ->
             opts = []
@@ -96,7 +136,7 @@ defmodule Core.HTTP.BaseRouter do
                 do: Keyword.put(opts, :max_attempts, var!(conn).body_params["max_attempts"]),
                 else: opts
 
-            {:ok, id} = Core.Workers.JobQueue.submit(payload, opts)
+            {:ok, id} = Core.Workers.JobQueue.submit(unquote(queue), payload, opts)
 
             var!(conn)
             |> put_resp_content_type("application/json")
@@ -114,14 +154,14 @@ defmodule Core.HTTP.BaseRouter do
         end
       end
 
-      post "/jobs/schedule" do
+      post "#{unquote(prefix)}/schedule" do
         payload = var!(conn).body_params["payload"]
         run_at_str = var!(conn).body_params["run_at"]
 
         if is_map(payload) and is_binary(run_at_str) do
           case DateTime.from_iso8601(run_at_str) do
             {:ok, run_at, _} ->
-              {:ok, id} = Core.Workers.JobQueue.submit_at(payload, run_at)
+              {:ok, id} = Core.Workers.JobQueue.submit_at(unquote(queue), payload, run_at)
 
               var!(conn)
               |> put_resp_content_type("application/json")
@@ -148,7 +188,7 @@ defmodule Core.HTTP.BaseRouter do
         end
       end
 
-      get "/jobs" do
+      get unquote(prefix) do
         try do
           params = var!(conn).query_params
 
@@ -173,7 +213,7 @@ defmodule Core.HTTP.BaseRouter do
               end
             end)
 
-          jobs = Core.Workers.JobQueue.all(opts)
+          jobs = Core.Workers.JobQueue.all(unquote(queue), opts)
 
           var!(conn)
           |> put_resp_content_type("application/json")
@@ -189,10 +229,10 @@ defmodule Core.HTTP.BaseRouter do
         end
       end
 
-      get "/jobs/:id" do
+      get "#{unquote(prefix)}/:id" do
         case Integer.parse(var!(id)) do
           {int_id, ""} ->
-            case Core.Workers.JobQueue.get(int_id) do
+            case Core.Workers.JobQueue.get(unquote(queue), int_id) do
               {:ok, job} ->
                 var!(conn)
                 |> put_resp_content_type("application/json")

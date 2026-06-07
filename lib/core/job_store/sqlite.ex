@@ -7,12 +7,22 @@ if Code.ensure_loaded?(Exqlite.Basic) do
     jobs are reloaded. `:running` jobs are reset to `:queued` so workers can
     reclaim them.
 
+    This is a **stateful** adapter: `init/1` returns the database path as
+    opaque state, and every subsequent callback receives that state as its
+    first argument. This allows multiple `JobQueue` processes to each use
+    their own SQLite file without sharing global configuration.
+
     ## Configuration
 
-        config :my_app, :job_store, Core.JobStore.SQLite
-        config :my_app, :job_store_opts, database: "priv/jobs.db"
+        {Core.Workers.JobQueue,
+          store: Core.JobStore.SQLite,
+          store_opts: [database: "priv/jobs.db"]}
 
     Requires `{:exqlite, "~> 0.29"}` in your `mix.exs` deps.
+
+    ## Options
+
+    * `:database` – path to the SQLite file (default: `"jobs.db"`)
 
     ## Connection model
 
@@ -41,13 +51,13 @@ if Code.ensure_loaded?(Exqlite.Basic) do
       Basic.exec(conn, table)
       Basic.exec(conn, index)
       Basic.close(conn)
-      :ok
+      {:ok, db_path}
     end
 
     @impl true
-    def insert_job(%Job{} = job) do
+    def insert_job(db_path, %Job{} = job) do
       {sql, params} = SQL.insert_params(job)
-      conn = open!()
+      conn = open!(db_path)
       Basic.exec(conn, sql, params)
       {:ok, [[id]], _cols} = Basic.exec(conn, "SELECT last_insert_rowid()") |> Basic.rows()
       Basic.close(conn)
@@ -56,17 +66,17 @@ if Code.ensure_loaded?(Exqlite.Basic) do
     end
 
     @impl true
-    def update_job(id, changes) do
+    def update_job(db_path, id, changes) do
       {sql, params} = SQL.update_params(id, changes)
-      conn = open!()
+      conn = open!(db_path)
       Basic.exec(conn, sql, params)
       Basic.close(conn)
       :ok
     end
 
     @impl true
-    def get_job(id) do
-      conn = open!()
+    def get_job(db_path, id) do
+      conn = open!(db_path)
       {:ok, rows, _cols} = Basic.exec(conn, SQL.select_by_id(), [id]) |> Basic.rows()
       Basic.close(conn)
 
@@ -77,7 +87,7 @@ if Code.ensure_loaded?(Exqlite.Basic) do
     end
 
     @impl true
-    def list_jobs(opts \\ []) do
+    def list_jobs(db_path, opts \\ []) do
       {sql, params} =
         if status = Keyword.get(opts, :status) do
           {SQL.select_by_status(), [Atom.to_string(status)]}
@@ -85,7 +95,7 @@ if Code.ensure_loaded?(Exqlite.Basic) do
           {SQL.select_all(), []}
         end
 
-      conn = open!()
+      conn = open!(db_path)
       {:ok, rows, _cols} = Basic.exec(conn, sql, params) |> Basic.rows()
       Basic.close(conn)
 
@@ -93,9 +103,9 @@ if Code.ensure_loaded?(Exqlite.Basic) do
     end
 
     @impl true
-    def cleanup(opts) do
+    def cleanup(db_path, opts) do
       {sql, params} = SQL.cleanup_params(Keyword.get(opts, :max_age_days, 7))
-      conn = open!()
+      conn = open!(db_path)
       Basic.exec(conn, sql, params)
       Basic.close(conn)
       :ok
@@ -105,20 +115,10 @@ if Code.ensure_loaded?(Exqlite.Basic) do
     # Private helpers
     # ------------------------------------------------------------------
 
-    defp open! do
-      db_path = get_db_path()
-      open!(db_path)
-    end
-
-    defp open!(path) do
-      {:ok, conn} = Basic.open(path)
+    defp open!(db_path) do
+      {:ok, conn} = Basic.open(db_path)
       {:ok, _query, _result, _conn} = Basic.exec(conn, "PRAGMA journal_mode = WAL")
       conn
-    end
-
-    defp get_db_path do
-      Application.get_env(:servcore, :job_store_opts, [])
-      |> Keyword.get(:database, "jobs.db")
     end
   end
 end
