@@ -26,6 +26,13 @@ defmodule Core.Workers.JobQueue do
     * `:store_opts` – options passed to the store's `init/1`
     * `:cleanup_interval_ms` – how often to purge old jobs (default: 1 hour)
     * `:max_age_days` – retention for completed / failed jobs (default: 7)
+
+  ## Worker notification
+
+  When a job is submitted (or a retry is scheduled), `JobQueue` calls
+  `notify_workers/1` which sends `:work_available` to every worker process
+  under the configured `WorkerPool`. Workers use this as an immediate
+  wake-up signal in addition to their fallback polling timer.
   """
   use GenServer
   require Logger

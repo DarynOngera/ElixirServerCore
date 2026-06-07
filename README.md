@@ -192,6 +192,140 @@ Jobs remain in the queue throughout their lifecycle, allowing you to track their
 
 ---
 
+## How Job Execution Works
+
+Understanding the exact path a job takes from submission to completion helps when writing custom workers or debugging processing issues.
+
+### 1. Job Submission
+
+A client submits a job via HTTP:
+
+```bash
+curl -X POST http://localhost:4000/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"payload": {"task": "send_email", "to": "user@example.com"}}'
+```
+
+The router calls `JobQueue.submit/2`, which:
+- Persists the job via the configured `Core.JobStore`
+- Assigns a unique job ID
+- Inserts the ID into the in-memory FIFO queue
+- Sends `:work_available` messages to every worker in the associated `WorkerPool`
+
+### 2. Worker Notification
+
+Workers are notified of new work through two mechanisms:
+
+**Immediate wake-up:**
+When a job is submitted, `JobQueue` calls `notify_workers/1`, which iterates over all child processes under the configured `WorkerPool` supervisor and sends each one a `:work_available` message.
+
+**Fallback polling:**
+Each worker also schedules a recurring `:work` message every `@poll_interval` ms (default: 1,000 ms). This ensures jobs are eventually picked up even if the wake-up message is missed.
+
+### 3. Job Claiming
+
+Upon receiving `:work_available` or `:work`, the worker calls `JobQueue.claim_next/1`:
+
+```elixir
+case JobQueue.claim_next(MyApp.Queue) do
+  {:ok, job} -> execute(job, state)
+  :empty     -> :noop
+end
+```
+
+`claim_next/1` is a synchronous `GenServer.call`, which serializes access to the queue. It atomically:
+1. Pops the next `:queued` job ID from the FIFO
+2. Updates the job's status to `:running`
+3. Increments the `attempt` counter
+4. Returns the full job struct to the worker
+
+Because `JobQueue` is a single GenServer, there is no risk of two workers claiming the same job.
+
+### 4. Performing the Work
+
+The worker calls `perform_work/1`, passing the job struct. **This is the hook where your business logic runs.**
+
+The default `Core.Workers.Worker` provides a placeholder:
+
+```elixir
+defp perform_work(job) do
+  Process.sleep(100)
+  %{status: "completed", job_id: job.id, processed_at: DateTime.utc_now()}
+end
+```
+
+To process real work, create a custom worker module that overrides this function:
+
+```elixir
+defmodule MyApp.EmailWorker do
+  # ... GenServer boilerplate (start_link, init, handle_info) ...
+
+  defp perform_work(job) do
+    case job.payload do
+      %{"task" => "send_email", "to" => recipient} ->
+        MyApp.Mailer.send(recipient)
+        %{status: "sent", to: recipient}
+
+      _ ->
+        %{error: "Unknown task"}
+    end
+  end
+end
+```
+
+### 5. Reporting the Result
+
+After `perform_work/1` returns:
+
+**On success:**
+```elixir
+JobQueue.mark_done(MyApp.Queue, job.id, result)
+```
+The job's status transitions to `:done`, and `result` is stored.
+
+**On exception:**
+```elixir
+error_details = %{error: Exception.message(error), stacktrace: ...}
+JobQueue.mark_failed(MyApp.Queue, job.id, error_details)
+```
+The job's status transitions to `:failed`. If retries remain, `JobQueue` schedules a retry with exponential backoff and re-inserts the job ID into the queue after the backoff period.
+
+### Summary Flow
+
+```
+Client POST /jobs
+    |
+    v
+Router --> JobQueue.submit(payload)
+    |           |
+    |           +---> Store.persist(job)
+    |           +---> Queue.in(job.id)
+    |           +---> notify_workers(pool)
+    |                     |
+    |                     v
+    |               WorkerPool workers
+    |                     |
+    |                     +---> receive :work_available
+    |                     +---> JobQueue.claim_next()
+    |                     |         |
+    |                     |         +---> status: :running
+    |                     |         +---> attempt + 1
+    |                     |         +---> return job
+    |                     v
+    |               perform_work(job)  <-- YOUR LOGIC HERE
+    |                     |
+    |           +---------+---------+
+    |           |                   |
+    |           v                   v
+    |   mark_done()           mark_failed()
+    |   status: :done          status: :failed
+    |   result stored          or retry scheduled
+    v
+Client GET /jobs/:id
+```
+
+---
+
 ## Project Structure
 
 ```text

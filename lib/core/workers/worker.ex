@@ -20,6 +20,15 @@ defmodule Core.Workers.Worker do
     * `:queue` – the `JobQueue` name to poll (default: `Core.Workers.JobQueue`)
     * `:pool` – the `WorkerPool` name this worker belongs to
 
+  ## Execution flow
+
+  1. The worker receives `:work_available` (immediate wake-up from `JobQueue`)
+     or `:work` (fallback timer every `@poll_interval` ms).
+  2. It calls `JobQueue.claim_next/1` to atomically claim the next `:queued` job.
+  3. It calls `perform_work/1` with the job struct — **this is your hook**.
+  4. On success it calls `JobQueue.mark_done/3`; on exception it calls
+     `JobQueue.mark_failed/3`.
+
   ## Telemetry events emitted
 
   - `[:core, :job, :start]`  — when a job begins executing
