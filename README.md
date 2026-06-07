@@ -1019,19 +1019,65 @@ This dual structure allows:
 
 ### Current Limitations
 
-- **In-Memory Only**: Jobs are lost on server restart
-- **Polling Overhead**: Workers poll every second
-- **No Job Priorities**: All jobs are processed FIFO
+- **Single GenServer bottleneck**: Each `JobQueue` serializes all operations (`submit`, `claim`, `mark_done`, `mark_failed`) through one process. A single queue caps throughput regardless of how many workers you add.
+- **Polling overhead**: Each worker schedules a fallback `:work` timer every `@poll_interval` ms (default: 1,000 ms). An idle pool of 8 workers generates 8 timer messages per second even when the queue is empty. The `:work_available` wake-up mitigates this when jobs are flowing.
+- **Head-of-line blocking**: All jobs in one queue are processed FIFO. A slow CPU-intensive job at the front delays faster I/O-bound jobs behind it.
+- **In-memory growth**: Job structs accumulate in the `JobQueue` state map until cleanup runs (default: hourly, 7-day retention). High throughput means linear memory growth between cleanups.
+- **SQLite throughput ceiling**: The built-in SQLite adapter opens a new connection per operation, capping throughput at roughly ~1,000 ops/sec. For higher throughput, implement a stateful `Core.JobStore` adapter using a connection pool.
 
-### Scaling Strategies
+### Throughput Expectations
 
-For production deployments, consider:
+| Backend | Typical throughput | Bottleneck |
+|---|---|---|
+| `Core.JobStore.Memory` | ~10,000+ ops/sec | Single GenServer message box |
+| `Core.JobStore.SQLite` | ~1,000 ops/sec | Per-operation connection open/close |
 
-1. **Multiple Pipelines**: Define separate queues and worker pools for different job types (e.g. CPU-intensive vs I/O-intensive) so they don't block each other.
-2. **Persistent Storage**: Add PostgreSQL or Redis for job persistence
-3. **Job Cleanup**: Archive completed jobs after N days
-4. **Priority Queue**: Implement job prioritization
-5. **Distributed Queue**: Use RabbitMQ or Kafka for distributed systems
+### Worker Pool Sizing
+
+Match `pool_size` to your bottleneck:
+
+- **CPU-bound** (transcoding, rendering): size ≈ `System.schedulers_online()` to avoid contention.
+- **I/O-bound** (HTTP calls, file uploads): size can be higher (8–32) since workers spend most time waiting.
+- **Mixed workloads**: This is where **multiple pipelines** shine.
+
+### Using Multiple Pipelines for Performance
+
+If you have distinct job types with different resource profiles, define separate pipelines so they don't compete:
+
+```elixir
+config :servcore, pipelines: [
+  [
+    queue_name: MyApp.HeavyQueue,
+    pool_name: MyApp.HeavyPool,
+    worker: MyApp.VideoWorker,
+    pool_size: System.schedulers_online(),   # CPU-bound, limited concurrency
+    job_store: Core.JobStore.SQLite,
+    job_store_opts: [database: "priv/heavy.db"]
+  ],
+  [
+    queue_name: MyApp.LightQueue,
+    pool_name: MyApp.LightPool,
+    worker: MyApp.WebhookWorker,
+    pool_size: 32,                             # I/O-bound, high concurrency
+    job_store: Core.JobStore.SQLite,
+    job_store_opts: [database: "priv/light.db"]
+  ]
+]
+```
+
+Benefits:
+- **No head-of-line blocking**: A slow video transcode cannot delay a fast webhook dispatch.
+- **Independent scaling**: Size each pool to match its workload without over-provisioning CPU workers.
+- **Isolated failure**: A crash in the video worker pool does not stop webhook processing.
+- **Per-queue stats**: Health checks and metrics report each pipeline separately.
+
+### Additional Scaling Strategies
+
+1. **Persistent Storage**: Use PostgreSQL or Redis for durability across restarts.
+2. **Connection Pooling**: Replace the SQLite adapter with a `DBConnection`-based store to remove per-operation connection overhead.
+3. **Job Priorities**: Within a single queue, implement a priority field so urgent jobs skip ahead of bulk processing.
+4. **Job Cleanup**: Reduce `max_age_days` or run cleanup more frequently to cap memory usage.
+5. **Distributed Queue**: For multi-node deployments, use RabbitMQ or Kafka instead of a single-node GenServer queue.
 
 ---
 
