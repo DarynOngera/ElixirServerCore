@@ -64,15 +64,22 @@ defmodule MultiQueueTest do
     plug(:dispatch)
 
     import Core.HTTP.BaseRouter
+    alias Core.HTTP.Handlers
 
     add_root_route()
     add_health_route([:queue_a, :queue_b])
     add_stats_route([:queue_a, :queue_b])
-    add_job_routes(queue: :queue_a, path_prefix: "/jobs")
-    add_job_routes(queue: :queue_b, path_prefix: "/media_jobs")
+
+    post "/jobs" do
+      Handlers.create_job(conn, :queue_a)
+    end
+
+    post "/media_jobs" do
+      Handlers.create_job(conn, :queue_b)
+    end
 
     match _ do
-      send_resp(conn, 404, Jason.encode!(%{error: "Not found"}))
+      Handlers.send_json(conn, 404, %{error: "Not found"})
     end
   end
 
@@ -97,8 +104,21 @@ defmodule MultiQueueTest do
       _pid -> JobQueue.reset()
     end
 
-    {:ok, _} = JobQueue.start_link(name: :queue_a, pool: :pool_a, store: Core.JobStore.Memory, store_opts: [name: :queue_a_store])
-    {:ok, _} = JobQueue.start_link(name: :queue_b, pool: :pool_b, store: Core.JobStore.Memory, store_opts: [name: :queue_b_store])
+    {:ok, _} =
+      JobQueue.start_link(
+        name: :queue_a,
+        pool: :pool_a,
+        store: Core.JobStore.Memory,
+        store_opts: [name: :queue_a_store]
+      )
+
+    {:ok, _} =
+      JobQueue.start_link(
+        name: :queue_b,
+        pool: :pool_b,
+        store: Core.JobStore.Memory,
+        store_opts: [name: :queue_b_store]
+      )
 
     on_exit(fn ->
       for name <- [:queue_a, :queue_b] do

@@ -14,13 +14,29 @@ defmodule Core.HTTP.Router do
   plug(:dispatch)
 
   import Core.HTTP.BaseRouter
+  alias Core.HTTP.Handlers
 
   add_root_route()
   add_health_route()
   add_stats_route()
-  add_job_routes()
+
+  post "/jobs" do
+    Handlers.create_job(conn)
+  end
+
+  post "/jobs/schedule" do
+    Handlers.schedule_job(conn)
+  end
+
+  get "/jobs" do
+    Handlers.list_jobs(conn)
+  end
+
+  get "/jobs/:id" do
+    Handlers.get_job(conn, id)
+  end
 
   match _ do
-    send_resp(conn, 404, Jason.encode!(%{error: "Not found"}))
+    Handlers.send_json(conn, 404, %{error: "Not found"})
   end
 end

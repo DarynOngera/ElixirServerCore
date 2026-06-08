@@ -128,9 +128,18 @@ Then mount their routes separately in your router:
 
 ```elixir
 import Core.HTTP.BaseRouter
+alias Core.HTTP.Handlers
 
-add_job_routes(queue: MyApp.EmailQueue, path_prefix: "/email_jobs")
-add_job_routes(queue: MyApp.MediaQueue, path_prefix: "/media_jobs")
+post "/email_jobs",        do: Handlers.create_job(conn, MyApp.EmailQueue)
+post "/email_jobs/schedule", do: Handlers.schedule_job(conn, MyApp.EmailQueue)
+get "/email_jobs",         do: Handlers.list_jobs(conn, MyApp.EmailQueue)
+get "/email_jobs/:id",     do: Handlers.get_job(conn, id, MyApp.EmailQueue)
+
+post "/media_jobs",        do: Handlers.create_job(conn, MyApp.MediaQueue)
+post "/media_jobs/schedule", do: Handlers.schedule_job(conn, MyApp.MediaQueue)
+get "/media_jobs",         do: Handlers.list_jobs(conn, MyApp.MediaQueue)
+get "/media_jobs/:id",     do: Handlers.get_job(conn, id, MyApp.MediaQueue)
+
 add_health_route([MyApp.EmailQueue, MyApp.MediaQueue])
 add_stats_route([MyApp.EmailQueue, MyApp.MediaQueue])
 ```
