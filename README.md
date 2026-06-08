@@ -15,33 +15,11 @@ Whether you're building a PDF conversion service, media-processing pipeline, web
 - **Single-node deployments** — SQLite-backed durability on a VPS, edge device, or homelab server
 - **Learning OTP** — understand how job queues, workers, supervision trees, and retries are implemented
 
-## Why Not Phoenix + Oban?
+## Why ServCore?
 
-Phoenix and Oban are excellent tools and should be the default choice for many production systems.
+Phoenix and Oban are excellent tools for full web applications. ServCore targets a narrower use case: standalone worker services that need only HTTP endpoints, a durable job queue, worker supervision, retries, scheduling, and basic observability.
 
-Elixir Server Core targets a different use case: standalone worker services where you don't need a full web application, database layer, or distributed job-processing platform.
-
-If your service only needs:
-
-- HTTP endpoints
-- A durable job queue
-- Worker supervision
-- Retries and scheduling
-- Basic observability
-
-Then a smaller toolkit can be easier to understand, customize, and deploy.
-
-## The Problem
-
-Many background-processing services start with a simple requirement:
-
-> Accept work, queue it, process it, retry failures, and survive restarts.
-
-Achieving that often means assembling multiple libraries or adopting a larger framework than the problem requires.
-
-## The Solution
-
-Elixir Server Core provides the building blocks for specialized worker services:
+Instead of assembling multiple libraries or adopting a larger framework than the problem requires, ServCore gives you a single, minimal foundation:
 
 - **Bandit** for HTTP endpoints
 - **OTP supervision trees** for fault tolerance
@@ -53,7 +31,27 @@ Elixir Server Core provides the building blocks for specialized worker services:
 
 Use in-memory storage for rapid prototyping, SQLite for lightweight durability, or implement the `Core.JobStore` behaviour to integrate with your preferred database.
 
-The result is a small, understandable foundation that stays close to Elixir's strengths while remaining easy to extend, fork, and deploy.
+---
+
+## High-Level Architecture
+
+```
+Client ──HTTP──▶ Router ──▶ OTP Supervision Tree
+                                 │
+                                 ├── JobQueue (GenServer)
+                                 │   ├── Queue: Job IDs
+                                 │   └── Jobs: Job Data Map
+                                 │
+                                 ├── WorkerPool (Supervisor)
+                                 │   └── Workers (GenServer) × N
+                                 │       └── Poll & Execute Jobs
+                                 │
+                                 └── Telemetry Events
+                                     │
+                                     ▼
+                                /metrics (optional)
+                                Prometheus → Grafana
+```
 
 ---
 
@@ -77,6 +75,8 @@ The result is a small, understandable foundation that stays close to Elixir's st
 ---
 
 ## Quick Start
+
+*Elixir 1.14+ and Erlang/OTP 26+ required*
 
 ### As a Library (add to deps)
 
@@ -124,7 +124,7 @@ config :servcore,
   ]
 ```
 
-Then mount their routes separately in your router:
+Then define routes explicitly in your router:
 
 ```elixir
 import Core.HTTP.BaseRouter
@@ -160,31 +160,15 @@ children = [
 
 ### As a Fork (customize internals)
 
-Clone, rename the app in `mix.exs`, edit `lib/core/` directly. See [FORKING.md](FORKING.md).
-
----
-
-## High-Level Architecture
-
-```
-Client ──HTTP──▶ Router ──▶ OTP Supervision Tree
-                                │
-                                ├── JobQueue (GenServer)
-                                │   ├── Queue: Job IDs
-                                │   └── Jobs: Job Data Map
-                                │
-                                ├── WorkerPool (Supervisor)
-                                │   └── Workers (GenServer) × N
-                                │       └── Poll & Execute Jobs
-                                │
-                                └── Telemetry Events
-                                    │
-                                    ▼
-                               /metrics (optional)
-                               Prometheus → Grafana
+```bash
+git clone https://github.com/DarynOngera/ServCore.git
+cd servcore
+mix deps.get
+mix compile
+mix run --no-halt
 ```
 
----
+Then rename the app in `mix.exs` and edit `lib/core/` directly. See [FORKING.md](FORKING.md).
 
 ## Job Lifecycle
 
@@ -203,103 +187,7 @@ Jobs remain in the queue throughout their lifecycle, allowing you to track their
 
 ## How Job Execution Works
 
-Understanding the exact path a job takes from submission to completion helps when writing custom workers or debugging processing issues.
-
-### 1. Job Submission
-
-A client submits a job via HTTP:
-
-```bash
-curl -X POST http://localhost:4000/jobs \
-  -H "Content-Type: application/json" \
-  -d '{"payload": {"task": "send_email", "to": "user@example.com"}}'
-```
-
-The router calls `JobQueue.submit/2`, which:
-- Persists the job via the configured `Core.JobStore`
-- Assigns a unique job ID
-- Inserts the ID into the in-memory FIFO queue
-- Sends `:work_available` messages to every worker in the associated `WorkerPool`
-
-### 2. Worker Notification
-
-Workers are notified of new work through two mechanisms:
-
-**Immediate wake-up:**
-When a job is submitted, `JobQueue` calls `notify_workers/1`, which iterates over all child processes under the configured `WorkerPool` supervisor and sends each one a `:work_available` message.
-
-**Fallback polling:**
-Each worker also schedules a recurring `:work` message every `@poll_interval` ms (default: 1,000 ms). This ensures jobs are eventually picked up even if the wake-up message is missed.
-
-### 3. Job Claiming
-
-Upon receiving `:work_available` or `:work`, the worker calls `JobQueue.claim_next/1`:
-
-```elixir
-case JobQueue.claim_next(MyApp.Queue) do
-  {:ok, job} -> execute(job, state)
-  :empty     -> :noop
-end
-```
-
-`claim_next/1` is a synchronous `GenServer.call`, which serializes access to the queue. It atomically:
-1. Pops the next `:queued` job ID from the FIFO
-2. Updates the job's status to `:running`
-3. Increments the `attempt` counter
-4. Returns the full job struct to the worker
-
-Because `JobQueue` is a single GenServer, there is no risk of two workers claiming the same job.
-
-### 4. Performing the Work
-
-The worker calls `perform_work/1`, passing the job struct. **This is the hook where your business logic runs.**
-
-The default `Core.Workers.Worker` provides a placeholder:
-
-```elixir
-defp perform_work(job) do
-  Process.sleep(100)
-  %{status: "completed", job_id: job.id, processed_at: DateTime.utc_now()}
-end
-```
-
-To process real work, create a custom worker module that overrides this function:
-
-```elixir
-defmodule MyApp.EmailWorker do
-  # ... GenServer boilerplate (start_link, init, handle_info) ...
-
-  defp perform_work(job) do
-    case job.payload do
-      %{"task" => "send_email", "to" => recipient} ->
-        MyApp.Mailer.send(recipient)
-        %{status: "sent", to: recipient}
-
-      _ ->
-        %{error: "Unknown task"}
-    end
-  end
-end
-```
-
-### 5. Reporting the Result
-
-After `perform_work/1` returns:
-
-**On success:**
-```elixir
-JobQueue.mark_done(MyApp.Queue, job.id, result)
-```
-The job's status transitions to `:done`, and `result` is stored.
-
-**On exception:**
-```elixir
-error_details = %{error: Exception.message(error), stacktrace: ...}
-JobQueue.mark_failed(MyApp.Queue, job.id, error_details)
-```
-The job's status transitions to `:failed`. If retries remain, `JobQueue` schedules a retry with exponential backoff and re-inserts the job ID into the queue after the backoff period.
-
-### Summary Flow
+A job flows from HTTP submission through the queue to worker execution:
 
 ```
 Client POST /jobs
@@ -333,6 +221,10 @@ Router --> JobQueue.submit(payload)
 Client GET /jobs/:id
 ```
 
+`JobQueue.submit/2` persists the job, assigns an ID, and wakes workers via `:work_available`. Workers claim jobs atomically through a `GenServer.call` to `claim_next/1`, execute `perform_work/1`, and report results via `mark_done/2` or `mark_failed/2`. Retries are scheduled with exponential backoff when attempts remain.
+
+For the full deep dive on worker notification, claiming mechanics, and custom workers, see `ARCHITECTURE.md`.
+
 ---
 
 ## Project Structure
@@ -343,7 +235,8 @@ servcore/
 │   ├── core/
 │   │   ├── http/
 │   │   │   ├── router.ex              # HTTP routing and endpoints
-│   │   │   └── base_router.ex         # Base router for forking
+│   │   │   ├── base_router.ex         # Macros for common routes (health, stats, root)
+│   │   │   └── handlers.ex            # Request handler functions
 │   │   ├── workers/
 │   │   │   ├── job.ex                 # Job struct definition
 │   │   │   ├── job_queue.ex           # Job queue GenServer
@@ -367,51 +260,6 @@ servcore/
 ├── mix.exs                            # Project dependencies
 ├── mix.lock
 └── README.md
-```
-
----
-
-## Getting Started
-
-### Requirements
-
-* Elixir 1.14 or newer
-* Erlang/OTP 26 or newer
-
----
-
-### Setup
-
-```bash
-# Clone the repository
-git clone https://github.com/DarynOngera/ServCore.git
-cd servcore
-
-# Install dependencies
-mix deps.get
-
-# Compile the project
-mix compile
-```
-
----
-
-### Running the Server
-
-```bash
-mix run --no-halt
-```
-
-Default address:
-```
-http://localhost:4000
-```
-
-You should see:
-```
-[info] Starting server on port 4000
-[info] http://localhost:4000
-[info] Worker started
 ```
 
 ---
@@ -912,6 +760,49 @@ defmodule MyMusicServer.Application do
 end
 ```
 
+### Custom Router
+
+Define routes explicitly so you can pick which job endpoints to expose and wrap them with authentication or middleware:
+
+```elixir
+defmodule MyMusicServer.Router do
+  use Plug.Router
+
+  plug(:match)
+  plug(Plug.Parsers, parsers: [:json], pass: ["application/json"], json_decoder: Jason)
+  plug(:dispatch)
+
+  alias Core.HTTP.Handlers
+
+  # Core routes — mount only the ones you need
+  get "/" do
+    send_resp(conn, 200, "Music Server is running")
+  end
+
+  post "/jobs" do
+    Handlers.create_job(conn, MyMusicServer.Queue)
+  end
+
+  get "/jobs" do
+    Handlers.list_jobs(conn, MyMusicServer.Queue)
+  end
+
+  get "/jobs/:id" do
+    Handlers.get_job(conn, id, MyMusicServer.Queue)
+  end
+
+  # Music-specific routes
+  get "/songs" do
+    songs = MyMusicServer.Library.all_songs()
+    send_resp(conn, 200, Jason.encode!(songs))
+  end
+
+  match _ do
+    Handlers.send_json(conn, 404, %{error: "Not found"})
+  end
+end
+```
+
 ### Extending Worker Behavior
 
 Create a custom worker module that overrides `perform_work/1`. It can run in a `WorkerPool` just like the default worker:
@@ -988,6 +879,16 @@ end
 ---
 
 ## Architecture Decisions
+
+### Why Explicit Route Functions?
+
+ServCore provides `Core.HTTP.Handlers` — plain functions that accept a `Plug.Conn` and return a `Plug.Conn` — instead of a monolithic `add_job_routes` macro. This gives you:
+
+- **Composable routes**: Mount only the endpoints you need (`/jobs` but not `/jobs/schedule`, for example)
+- **Middleware-friendly**: Wrap individual routes with authentication, rate limiting, or logging without abandoning the macro entirely
+- **Single source of truth**: `Core.HTTP.Router` and your custom router both call the same handler functions, eliminating drift between implementations
+
+Small macros like `add_health_route` and `add_stats_route` remain because they inject a single, stable route with no variation. Job routes are the opposite — the most likely thing a forking developer will want to customize.
 
 ### Why GenServer for Job Queue?
 
@@ -1080,13 +981,7 @@ Benefits:
 - **Isolated failure**: A crash in the video worker pool does not stop webhook processing.
 - **Per-queue stats**: Health checks and metrics report each pipeline separately.
 
-### Additional Scaling Strategies
-
-1. **Persistent Storage**: Use PostgreSQL or Redis for durability across restarts.
-2. **Connection Pooling**: Replace the SQLite adapter with a `DBConnection`-based store to remove per-operation connection overhead.
-3. **Job Priorities**: Within a single queue, implement a priority field so urgent jobs skip ahead of bulk processing.
-4. **Job Cleanup**: Reduce `max_age_days` or run cleanup more frequently to cap memory usage.
-5. **Distributed Queue**: For multi-node deployments, use RabbitMQ or Kafka instead of a single-node GenServer queue.
+For more scaling strategies — persistent storage adapters, connection pooling, job priorities, and distributed queues — see `SCALING.md`.
 
 ---
 
@@ -1269,14 +1164,6 @@ For questions, issues, or feature requests, please open an issue on GitHub.
 ---
 
 ## Roadmap
-
-Completed:
-- [x] Worker pool for parallel processing
-- [x] Job scheduling (cron-like)
-- [x] Job retries with exponential backoff
-- [x] SQLite persistence backend
-- [x] Pluggable `Core.JobStore` behaviour for custom databases
-- [x] Multiple independent job queues and worker pools
 
 Planned:
 - [ ] PostgreSQL persistence backend (via `Core.JobStore.SQL` + Postgrex)
