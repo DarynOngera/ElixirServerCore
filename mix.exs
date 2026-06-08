@@ -18,7 +18,7 @@ defmodule ElixirServerCore.MixProject do
         main: "readme",
         extras: ["README.md", "FORKING.md", "ENDPOINT_TEST.md"],
         groups_for_modules: [
-          "HTTP Layer": [Core.HTTP.Router, Core.HTTP.BaseRouter],
+          "HTTP Layer": [Core.HTTP.Router, Core.HTTP.BaseRouter, Core.HTTP.Handlers],
           "Job System": [
             Core.Workers.Job,
             Core.Workers.JobQueue,

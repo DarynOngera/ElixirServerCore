@@ -79,11 +79,17 @@ defmodule MyMusicServer.Router do
 
   # Import base route helpers
   import Core.HTTP.BaseRouter
+  alias Core.HTTP.Handlers
   
   # Add standard routes from core
   add_root_route()
   add_health_route()
-  add_job_routes()
+
+  # Job routes are explicit so you can wrap or skip individual ones
+  post "/jobs",        do: Handlers.create_job(conn)
+  post "/jobs/schedule", do: Handlers.schedule_job(conn)
+  get "/jobs",         do: Handlers.list_jobs(conn)
+  get "/jobs/:id",     do: Handlers.get_job(conn, id)
 
   # Add your custom routes
   get "/songs" do
